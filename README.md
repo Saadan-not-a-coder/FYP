@@ -1,16 +1,38 @@
-# React + Vite
+# Supply Chain Risk Management MVP
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A full-stack predictive supply chain dashboard for calculating live order-level lead-time variance and risk-adjusted safety stock. 
 
-Currently, two official plugins are available:
+## Tech Stack
+* **Frontend:** React + Vite
+* **Backend:** Python (FastAPI)
+* **Database:** Supabase (PostgreSQL)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 🚀 How to Run Locally
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+To run this project, you will need three separate terminal windows open at the same time.
 
-## Expanding the Oxlint configuration
+### Prerequisites
+Make sure you have Node.js and Python 3 installed on your machine.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+### 1. Clone the Repository
+Run this in your terminal to download the code and enter the folder:
+`git clone https://github.com/Saadan-not-a-coder/FYP.git`
+`cd FYP`
+
+### 2. Start the Machine Learning API (Terminal 1)
+This FastAPI microservice handles the risk mathematics and database communication. Open a terminal and run:
+`pip install fastapi uvicorn supabase pydantic requests`
+`python ml_service.py`
+*Wait until it says "Uvicorn running on http://0.0.0.0:8000" and leave this terminal open.*
+
+### 3. Start the React Frontend (Terminal 2)
+This launches the Management by Exception dashboard. Open a second, new terminal window and run:
+`npm install`
+`npm run dev`
+*Click the http://localhost:5173 link in the terminal to view the dashboard in your browser.*
+
+### 4. Optional: Run the Batch Processor (Terminal 3)
+If you need to process new raw orders and push fresh calculations to the Supabase cloud, open a third terminal while the FastAPI server (Terminal 1) is running:
+`python run_all_orders.py`
