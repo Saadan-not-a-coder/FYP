@@ -72,11 +72,44 @@ That identity holds because the engine writes `ROP = Âµd Â· ÂµL + SS`.
 
 1. Refresh the dashboard â€” every row should show **$X at risk** plus buffer / stockout-per-day.
 2. Check PO `56606` after the 3.1 recompute: unit price $39.99, SS 10, Âµd 3.0, ÏƒL 1.7122 â†’ about **$205 at risk**, buffer locks **$400**, stockout **$120/day**.
+---
+
+## 3.3 Interactive vendor delivery charts
+
+**Status:** complete
+
+### What was done
+
+- Installed echarts as a production dependency.
+- Added **VendorRankingChart** — an always-visible horizontal bar chart at the top of the dashboard showing the top 20 vendors ranked by s_L. Each bar is coloured CRITICAL / WARNING / NORMAL to match the risk badge palette. Two reference lines mark the CRITICAL (1.85) and WARNING (1.65) thresholds. A custom tooltip shows s_L, µ_L, order count, and total revenue at risk for the hovered vendor.
+- Added **VendorModal** — a full-screen overlay that opens when the user clicks any bar in the ranking chart **or** any Vendor ID link in the orders table. The modal fetches that vendor's complete delivery history from Supabase and renders two charts:
+  1. **Lead-Time Timeline** (ScatterChart) — every PO delivery plotted in chronological order with reference lines at µ_L and µ_L ± s_L, so erratic vendors visually "spray" above and below the band.
+  2. **Lead-Time Distribution** (BarChart histogram, 1-day bins) — shows whether a vendor clusters tightly around the mean or has a fat tail. A wider histogram directly explains a high s_L to a non-technical audience.
+- Stat pills inside the modal show: mean LT, s_L, delivery count, min LT, max LT.
+- Modal closes on backdrop click or Escape key.
+- Helper uildHistogram(values, bucketSize) builds frequency bins without any extra library.
+- Helper uildVendorSummary(orders, topN) derives one row per vendor from the already-loaded orders array — no extra Supabase query for the ranking chart.
+
+### Why it was done this way
+
+- **No extra fetch for the ranking chart.** The orders table is already loaded into state; aggregating per-vendor in the browser costs nothing and avoids a second round-trip.
+- **ScatterChart for timeline, BarChart for distribution.** A line chart would imply continuous time and connect outlier spikes in a misleading way. Scatter treats each delivery as an independent event, which is statistically correct. The histogram gives the jury the distribution shape they expect from a statistics-aware system.
+- **µ_L ± s_L reference lines.** Plotting the bands directly on the timeline lets any stakeholder eyeball how often a vendor's actual lead time falls outside the expected interval — a direct, visual interpretation of s_L.
+- **Recharts chosen over Chart.js / Victory.** Recharts is the dominant React-native SVG chart library (React 19 compatible), declarative, and tree-shakeable. Chart.js requires an imperative canvas API that fights React's render model.
+- **One modal, not a new route.** Adding a router for an MVP slide deck demo increases cognitive overhead. The modal opens and closes without a URL change, which is fine for a viva.
+
+### How to verify
+
+1. 
+pm run dev — open the dashboard.
+2. The **Vendor Risk Ranking** bar chart appears above the orders table. Bars coloured red are CRITICAL vendors.
+3. Click any bar ? modal opens with that vendor's timeline + histogram. Click outside or press Escape to close.
+4. Click any underlined Vendor ID in the table ? same modal.
+5. Hover a bar ? tooltip shows s_L, µ_L, order count, revenue at risk.
 
 ---
 
 ## Remaining roadmap
 
-- 3.3 Interactive vendor delivery charts
 - 3.4 Cold-start fallback for new vendors
 - 3.5 Cloud deployment and CI/CD
