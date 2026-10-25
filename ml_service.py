@@ -113,6 +113,30 @@ def safety_stock(mu_d: float, sigma_d: float, mu_l: float, sigma_l: float) -> fl
     return Z_SCORE * ((mu_l * (sigma_d ** 2)) + ((mu_d ** 2) * (sigma_l ** 2))) ** 0.5
 
 
+def cost_of_risk_metrics(
+    safety_stock_units: float,
+    mu_d: float,
+    sigma_l: float,
+    unit_price: float | None,
+) -> dict[str, float]:
+    """
+    Translate delay risk into money.
+
+    - capital_locked: working capital tied up by the recommended buffer
+    - stockout_cost_per_day: revenue that does not land for each stockout day
+    - cost_of_risk: expected revenue exposure from one σ of extra lead time
+    """
+    price = float(unit_price or 0)
+    capital_locked = safety_stock_units * price
+    stockout_cost_per_day = mu_d * price
+    cost_of_risk = sigma_l * stockout_cost_per_day
+    return {
+        "capital_locked": round(capital_locked, 2),
+        "stockout_cost_per_day": round(stockout_cost_per_day, 2),
+        "cost_of_risk": round(cost_of_risk, 2),
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -122,7 +146,7 @@ def health():
 def analyze_risk(payload: AnalyzeRequest):
     order_rows = (
         supabase.table("orders")
-        .select("po_id,vendor_id,sku_id")
+        .select("po_id,vendor_id,sku_id,unit_price")
         .eq("po_id", payload.po_id)
         .limit(1)
         .execute()
@@ -141,13 +165,16 @@ def analyze_risk(payload: AnalyzeRequest):
 
     ss = safety_stock(mu_d, sigma_d, mu_l, sigma_l)
     reorder_point = (mu_d * mu_l) + ss
+    ss_units = int(round(ss))
+    rop_units = int(round(reorder_point))
     status = _risk_status(sigma_l)
+    money = cost_of_risk_metrics(ss_units, mu_d, sigma_l, order.get("unit_price"))
 
     update_body = {
         "predicted_mu_l": round(mu_l, 4),
         "predicted_sigma_l": round(sigma_l, 4),
-        "safety_stock": int(round(ss)),
-        "reorder_point": int(round(reorder_point)),
+        "safety_stock": ss_units,
+        "reorder_point": rop_units,
         "risk_status": status,
     }
 
@@ -163,7 +190,10 @@ def analyze_risk(payload: AnalyzeRequest):
         "demand_days": demand_days,
         "vendor_history_n": vendor_n,
         "z_score": Z_SCORE,
+        "unit_price": order.get("unit_price"),
+        **money,
         "formula": "SS = Z * sqrt(µ_L * σ_d^2 + µ_d^2 * σ_L^2)",
+        "cost_of_risk_formula": "cost_of_risk = σ_L * µ_d * unit_price",
     }
 
 

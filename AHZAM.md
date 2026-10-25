@@ -6,7 +6,7 @@ This file records what was added on the `Ahzam` branch, and why that design was 
 
 ## 3.1 Dynamic demand calculation
 
-**Status:** done (waiting on review)
+**Status:** complete
 
 ### What was done
 
@@ -36,9 +36,47 @@ This file records what was added on the `Ahzam` branch, and why that design was 
 
 ---
 
-## Remaining roadmap (not started on this commit)
+## 3.2 Financial cost of risk (actuarial metrics)
 
-- 3.2 Financial cost of risk (actuarial metrics)
+**Status:** complete
+
+### What was done
+
+- Added `cost_of_risk_metrics()` in `ml_service.py` so delay is converted into money on every `/api/analyze_risk` call.
+- Added a **Financial Impact** column on the React dashboard.
+
+Metrics:
+
+| Metric | Formula | Meaning |
+|---|---|---|
+| Capital locked | `SS × unit_price` | Working capital tied up by the recommended buffer |
+| Stockout cost / day | `µd × unit_price` | Revenue that does not land for each day of a stockout |
+| **Cost of risk** | `σL × µd × unit_price` | Expected revenue exposure from one standard deviation of extra lead time |
+
+The dashboard headline number is **cost of risk**. The smaller line shows capital locked vs daily stockout cost.
+
+µd is recovered on the frontend from fields already stored on the order:
+
+`µd = (reorder_point − safety_stock) / predicted_mu_l`
+
+That identity holds because the engine writes `ROP = µd · µL + SS`.
+
+### Why it was done this way
+
+- **Two sides of the same trade-off.** The roadmap asked for capital locked in safety stock *versus* revenue lost per stockout day. Showing only one number would hide the holding-vs-stockout decision the jury cares about.
+- **Cost of risk uses σL, not a single historical delay.** `delay_days` on one PO is a realized outcome. σL is the predictive uncertainty the rest of the MVP already ranks vendors by, so the dollar figure stays aligned with the risk badge.
+- **No new Supabase columns.** Writing `cost_of_risk` into an unused field such as `predicted_p_late` would confuse a viva. Deriving money from `safety_stock`, `reorder_point`, `predicted_mu_l`, `predicted_sigma_l`, and `unit_price` keeps the schema stable and still works for rows that have not been re-batched.
+- **Logic lives in Python first.** The dashboard repeats the same arithmetic for display so managers do not need a new DB migration before the column appears.
+
+### How to verify
+
+1. Refresh the dashboard — every row should show **$X at risk** plus buffer / stockout-per-day.
+2. Check PO `56606` after the 3.1 recompute: unit price $39.99, SS 10, µd 3.0, σL 1.7122 → about **$205 at risk**, buffer locks **$400**, stockout **$120/day**.
+
+---
+
+## Remaining roadmap
+
 - 3.3 Interactive vendor delivery charts
 - 3.4 Cold-start fallback for new vendors
 - 3.5 Cloud deployment and CI/CD
