@@ -106,10 +106,53 @@ pm run dev — open the dashboard.
 3. Click any bar ? modal opens with that vendor's timeline + histogram. Click outside or press Escape to close.
 4. Click any underlined Vendor ID in the table ? same modal.
 5. Hover a bar ? tooltip shows s_L, µ_L, order count, revenue at risk.
+---
+
+## 3.4 Cold-start fallback for new vendors
+
+**Status:** complete
+
+### What was done
+
+**`ml_service.py`**
+
+- Removed the hard `HTTPException(422)` that was raised when `vendor_lead_time_stats()` found no history for a vendor.
+- Added `_global_lead_time_stats()`: queries `actual_lead_time` across all orders, computes fleet-wide (mu_L, sigma_L, n), and caches the result at the module level for the lifetime of the process. A hard-coded last-resort fallback of (7.0, 2.0) is used only if the entire table is empty.
+- `vendor_lead_time_stats()` now returns `(global_mu, global_sigma, 0)` instead of raising when a vendor has no rows. The caller detects cold-start from `vendor_n == 0`.
+- In `analyze_risk()`, when `vendor_n == 0`:
+  - `stored_status` is prefixed with `"COLD_"` (e.g. `"COLD_CRITICAL"`) and written to the `risk_status` column. This signals cold-start to the dashboard without adding a new DB column.
+  - Response JSON includes `cold_start: true` and a human-readable `cold_start_note` explaining which global values were used and how many deliveries they are based on.
+- Added `GET /api/global_stats`: returns the cached fleet average and its implied risk status. Useful at the viva to demonstrate what fallback is in use.
+- Added `POST /api/reset_global_cache`: clears the in-process cache so operators can force a re-query after bulk-importing new orders.
+
+**`src/App.jsx`**
+
+- Added `isColdStart(order)`: returns `true` when `order.risk_status` starts with `"COLD_"`.
+- `RiskBadge` now accepts a `coldStart` prop and renders a grey `cold-start` pill alongside the severity pill when applicable.
+- `SummaryBar` gained a **Cold-start vendors** count card (dimmed when zero).
+- Filter toolbar gained a **Cold-start** tab that isolates cold-start rows for quick inspection.
+- Cold-start rows in the table get a faint purple background tint so they stand out from CRITICAL (red) and normal (white/grey) rows.
+- Faded / hatched bars in `VendorRankingChart` visually distinguish cold-start vendors.
+- `VendorModal` passes `isColdStartVendor` down and shows a purple banner explaining the fallback when opened for a cold-start vendor.
+
+### Why it was done this way
+
+- **No new DB column.** The `risk_status` field already holds a string. Prefixing it with `"COLD_"` reuses existing storage while keeping the signal queryable (`WHERE risk_status LIKE 'COLD_%'`). A separate boolean column would require a migration.
+- **Module-level cache, not a DB table.** The global average is stable over a single batch run. Caching it avoids one extra Supabase round-trip per order and lets operators control freshness explicitly via `/api/reset_global_cache`.
+- **Hard-coded last-resort of (7.0, 2.0).** These values are a common industry baseline (one work-week mean, two-day std). They are only reached if `actual_lead_time` is null on every single row — a condition that only exists on an empty or uncleaned database.
+- **The cold-start label degrades gracefully.** Once a vendor accumulates real deliveries and `run_all_orders.py` is re-run, `vendor_history_n` will be > 0, the `COLD_` prefix will be overwritten with a plain `CRITICAL/WARNING/NORMAL`, and every downstream indicator (badge, bar tint, modal banner) disappears automatically.
+- **`/api/global_stats` for the viva.** Examiners often ask "what happens with a brand-new vendor?" Being able to hit a single endpoint and see the exact fallback values in a JSON response is a concrete, live demonstration of the answer.
+
+### How to verify
+
+1. `python -m uvicorn ml_service:app --host 127.0.0.1 --port 8000`
+2. POST `/api/analyze_risk` with a `po_id` belonging to a vendor that does not yet exist in any other order row. Response should include `"cold_start": true` and a `cold_start_note`.
+3. GET `http://localhost:8000/api/global_stats` — confirm the fleet average values.
+4. On the React dashboard, filter by **Cold-start**; those rows should have the grey `cold-start` pill and faint purple row background.
+5. Click the vendor ID for a cold-start vendor — the modal shows the purple warning banner.
 
 ---
 
 ## Remaining roadmap
 
-- 3.4 Cold-start fallback for new vendors
 - 3.5 Cloud deployment and CI/CD

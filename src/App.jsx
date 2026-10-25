@@ -14,8 +14,16 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 const CRITICAL_THRESHOLD = 1.85
 const WARNING_THRESHOLD  = 1.65
 
+// ── Cold-start detection (3.4) ───────────────────────────────────────────────
+// ml_service.py prefixes risk_status with "COLD_" when a vendor had no
+// delivery history at analysis time.  All other logic uses the raw σ_L math.
+function isColdStart(order) {
+  return typeof order.risk_status === 'string' && order.risk_status.startsWith('COLD_')
+}
+
 // ── Financial derivation from stored columns ─────────────────────────────────
 // Identity: ROP = µ_d * µ_L + SS  →  µ_d = (ROP − SS) / µ_L
+// Cost of risk = σ_L * µ_d * unit_price
 function financials(order) {
   const price  = Number(order.unit_price)        || 0
   const ss     = Number(order.safety_stock)      || 0
@@ -49,31 +57,46 @@ function riskStatus(sigmaL) {
 const STATUS_COLOR = { CRITICAL: '#dc2626', WARNING: '#d97706', NORMAL: '#16a34a' }
 const STATUS_BG    = { CRITICAL: '#fee2e2', WARNING: '#fef9c3', NORMAL: '#dcfce7' }
 
-function RiskBadge({ sigmaL }) {
+// RiskBadge shows the severity pill + an optional grey cold-start tag (3.4)
+function RiskBadge({ sigmaL, coldStart }) {
   const s = riskStatus(sigmaL)
   return (
-    <span style={{
-      backgroundColor: STATUS_BG[s], color: STATUS_COLOR[s],
-      padding: '3px 10px', borderRadius: '9999px',
-      fontWeight: '600', fontSize: '12px', whiteSpace: 'nowrap',
-    }}>
-      {s}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'nowrap' }}>
+      <span style={{
+        backgroundColor: STATUS_BG[s], color: STATUS_COLOR[s],
+        padding: '3px 10px', borderRadius: '9999px',
+        fontWeight: '600', fontSize: '12px', whiteSpace: 'nowrap',
+      }}>
+        {s}
+      </span>
+      {coldStart && (
+        <span style={{
+          backgroundColor: '#f1f5f9', color: '#64748b',
+          padding: '3px 8px', borderRadius: '9999px',
+          fontWeight: '500', fontSize: '11px', whiteSpace: 'nowrap',
+          border: '1px solid #cbd5e1',
+        }}>
+          cold-start
+        </span>
+      )}
     </span>
   )
 }
 
 // ── Summary cards ────────────────────────────────────────────────────────────
 function SummaryBar({ orders }) {
-  const critical    = orders.filter(o => riskStatus(o.predicted_sigma_l) === 'CRITICAL').length
-  const warning     = orders.filter(o => riskStatus(o.predicted_sigma_l) === 'WARNING').length
-  const totalRisk   = orders.reduce((s, o) => s + (financials(o).costOfRisk   ?? 0), 0)
-  const totalBuffer = orders.reduce((s, o) => s + (financials(o).capitalLocked ?? 0), 0)
+  const critical   = orders.filter(o => riskStatus(o.predicted_sigma_l) === 'CRITICAL').length
+  const warning    = orders.filter(o => riskStatus(o.predicted_sigma_l) === 'WARNING').length
+  const coldStarts = orders.filter(isColdStart).length
+  const totalRisk  = orders.reduce((s, o) => s + (financials(o).costOfRisk   ?? 0), 0)
+  const totalBuffer= orders.reduce((s, o) => s + (financials(o).capitalLocked ?? 0), 0)
 
-  const card = (label, value, accent) => (
+  const card = (label, value, accent, dimmed) => (
     <div key={label} style={{
-      flex: '1 1 160px', backgroundColor: '#fff',
+      flex: '1 1 150px', backgroundColor: '#fff',
       border: `1px solid ${accent}33`, borderLeft: `4px solid ${accent}`,
       borderRadius: '8px', padding: '16px 20px',
+      opacity: dimmed ? 0.7 : 1,
     }}>
       <div style={{ fontSize: '22px', fontWeight: '700', color: accent }}>{value}</div>
       <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px' }}>{label}</div>
@@ -82,11 +105,12 @@ function SummaryBar({ orders }) {
 
   return (
     <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '28px' }}>
-      {card('Total orders shown',       orders.length,          '#3b82f6')}
-      {card('Critical vendors',         critical,               '#dc2626')}
-      {card('Warning vendors',          warning,                '#d97706')}
-      {card('Total revenue at risk',    formatMoney(totalRisk), '#7c3aed')}
-      {card('Capital locked in buffer', formatMoney(totalBuffer),'#0891b2')}
+      {card('Total orders shown',       orders.length,           '#3b82f6')}
+      {card('Critical vendors',         critical,                '#dc2626')}
+      {card('Warning vendors',          warning,                 '#d97706')}
+      {card('Cold-start vendors',       coldStarts,              '#7c3aed', coldStarts === 0)}
+      {card('Total revenue at risk',    formatMoney(totalRisk),  '#0891b2')}
+      {card('Capital locked in buffer', formatMoney(totalBuffer),'#0f766e')}
     </div>
   )
 }
@@ -95,22 +119,19 @@ function SummaryBar({ orders }) {
 // 3.3 — VENDOR DELIVERY CHARTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Derives one summary row per vendor from the already-loaded orders array.
- * Returns the top-N vendors sorted by σ_L descending.
- */
 function buildVendorSummary(orders, topN = 20) {
   const map = {}
   for (const o of orders) {
     const vid = o.vendor_id
     if (!map[vid]) {
       map[vid] = {
-        vendor_id: vid,
-        sigma_l: Number(o.predicted_sigma_l) || 0,
-        mu_l:    Number(o.predicted_mu_l)    || 0,
-        status:  riskStatus(Number(o.predicted_sigma_l)),
+        vendor_id:  vid,
+        sigma_l:    Number(o.predicted_sigma_l) || 0,
+        mu_l:       Number(o.predicted_mu_l)    || 0,
+        status:     riskStatus(Number(o.predicted_sigma_l)),
+        coldStart:  isColdStart(o),
         orderCount: 0,
-        totalRisk: 0,
+        totalRisk:  0,
       }
     }
     const m = financials(o)
@@ -122,37 +143,37 @@ function buildVendorSummary(orders, topN = 20) {
     .slice(0, topN)
 }
 
-/** Recharts custom bar colours keyed by risk status stored in the datum. */
-function vendorBarColor(status) {
-  return STATUS_COLOR[status] ?? '#94a3b8'
-}
+function vendorBarColor(status) { return STATUS_COLOR[status] ?? '#94a3b8' }
 
-// Custom bar shape that colours each bar individually
 function ColoredBar(props) {
-  const { x, y, width, height, status } = props
+  const { x, y, width, height, status, coldStart } = props
   if (height <= 0) return null
-  return <rect x={x} y={y} width={width} height={height} fill={vendorBarColor(status)} rx={3} />
+  // Cold-start bars are shown with a hatched pattern (dashed border style via opacity)
+  return (
+    <rect
+      x={x} y={y} width={width} height={height}
+      fill={vendorBarColor(status)}
+      fillOpacity={coldStart ? 0.4 : 0.85}
+      rx={3}
+      strokeDasharray={coldStart ? '4 2' : undefined}
+      stroke={coldStart ? vendorBarColor(status) : 'none'}
+      strokeWidth={coldStart ? 1.5 : 0}
+    />
+  )
 }
 
-/**
- * Horizontal bar chart: top vendors ranked by σ_L.
- * Bars are coloured CRITICAL/WARNING/NORMAL.
- * Clicking a bar fires onSelect(vendor_id).
- */
 function VendorRankingChart({ orders, onSelect }) {
   const data = buildVendorSummary(orders, 20)
   if (data.length === 0) return null
 
-  // Recharts wants the category on the X axis for vertical bars,
-  // but horizontal is cleaner for long vendor IDs.
-  // We'll do a vertical bar chart with shortened labels.
   const chartData = data.map(d => ({
-    name: String(d.vendor_id),
-    sigma_l: parseFloat(d.sigma_l.toFixed(4)),
-    status: d.status,
-    mu_l: parseFloat(d.mu_l.toFixed(2)),
+    name:       String(d.vendor_id),
+    sigma_l:    parseFloat(d.sigma_l.toFixed(4)),
+    status:     d.status,
+    coldStart:  d.coldStart,
+    mu_l:       parseFloat(d.mu_l.toFixed(2)),
     orderCount: d.orderCount,
-    totalRisk: d.totalRisk,
+    totalRisk:  d.totalRisk,
   }))
 
   const CustomTooltip = ({ active, payload }) => {
@@ -161,7 +182,7 @@ function VendorRankingChart({ orders, onSelect }) {
     return (
       <div style={{
         background: '#1e293b', color: '#f8fafc', padding: '10px 14px',
-        borderRadius: '8px', fontSize: '12px', lineHeight: '1.6',
+        borderRadius: '8px', fontSize: '12px', lineHeight: '1.7',
       }}>
         <div style={{ fontWeight: '700', marginBottom: '4px' }}>Vendor {d.name}</div>
         <div>σ_L (std dev): <strong>{d.sigma_l}</strong></div>
@@ -169,6 +190,11 @@ function VendorRankingChart({ orders, onSelect }) {
         <div>Orders: <strong>{d.orderCount}</strong></div>
         <div>Revenue at risk: <strong>{formatMoney(d.totalRisk)}</strong></div>
         <div style={{ marginTop: '6px', color: STATUS_COLOR[d.status], fontWeight: '700' }}>{d.status}</div>
+        {d.coldStart && (
+          <div style={{ color: '#a78bfa', marginTop: '4px', fontSize: '11px' }}>
+            ⚠ Cold-start — fleet average in use
+          </div>
+        )}
         <div style={{ color: '#94a3b8', marginTop: '4px' }}>Click to view delivery history</div>
       </div>
     )
@@ -185,35 +211,26 @@ function VendorRankingChart({ orders, onSelect }) {
           Vendor Risk Ranking — Lead-Time Volatility (σ_L)
         </h2>
         <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
-          Showing top {chartData.length} vendors by σ_L. Click any bar to drill into delivery history.
+          Top {chartData.length} vendors by σ_L. Faded bars = cold-start (fleet average used). Click any bar to drill into delivery history.
         </p>
       </div>
-
-      {/* Reference lines */}
       <ResponsiveContainer width="100%" height={280}>
         <BarChart
           data={chartData}
-          margin={{ top: 10, right: 20, left: 0, bottom: 60 }}
+          margin={{ top: 10, right: 50, left: 0, bottom: 60 }}
           onClick={e => e?.activePayload?.[0] && onSelect(e.activePayload[0].payload.name)}
           style={{ cursor: 'pointer' }}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-          <XAxis
-            dataKey="name"
-            tick={{ fontSize: 11, fill: '#64748b' }}
-            angle={-40}
-            textAnchor="end"
-            interval={0}
-          />
-          <YAxis
-            tick={{ fontSize: 11, fill: '#64748b' }}
-            tickFormatter={v => v.toFixed(1)}
-          >
+          <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} angle={-40} textAnchor="end" interval={0} />
+          <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={v => v.toFixed(1)}>
             <Label value="σ_L" angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#94a3b8' }} />
           </YAxis>
           <Tooltip content={<CustomTooltip />} cursor={{ fill: '#f1f5f950' }} />
-          <ReferenceLine y={CRITICAL_THRESHOLD} stroke={STATUS_COLOR.CRITICAL} strokeDasharray="4 3" label={{ value: 'CRITICAL', position: 'right', fontSize: 10, fill: STATUS_COLOR.CRITICAL }} />
-          <ReferenceLine y={WARNING_THRESHOLD}  stroke={STATUS_COLOR.WARNING}  strokeDasharray="4 3" label={{ value: 'WARNING',  position: 'right', fontSize: 10, fill: STATUS_COLOR.WARNING  }} />
+          <ReferenceLine y={CRITICAL_THRESHOLD} stroke={STATUS_COLOR.CRITICAL} strokeDasharray="4 3"
+            label={{ value: 'CRITICAL', position: 'right', fontSize: 10, fill: STATUS_COLOR.CRITICAL }} />
+          <ReferenceLine y={WARNING_THRESHOLD} stroke={STATUS_COLOR.WARNING} strokeDasharray="4 3"
+            label={{ value: 'WARNING', position: 'right', fontSize: 10, fill: STATUS_COLOR.WARNING }} />
           <Bar dataKey="sigma_l" shape={<ColoredBar />} maxBarSize={40} />
         </BarChart>
       </ResponsiveContainer>
@@ -221,10 +238,7 @@ function VendorRankingChart({ orders, onSelect }) {
   )
 }
 
-/**
- * Builds a histogram (bucket counts) from an array of numeric values.
- * Returns [{bucket: '5–6', count: 3}, …]
- */
+// ── Histogram helper ─────────────────────────────────────────────────────────
 function buildHistogram(values, bucketSize = 1) {
   if (!values.length) return []
   const min = Math.floor(Math.min(...values))
@@ -232,28 +246,17 @@ function buildHistogram(values, bucketSize = 1) {
   const buckets = []
   for (let lo = min; lo < max; lo += bucketSize) {
     const hi = lo + bucketSize
-    buckets.push({
-      bucket: `${lo}–${hi}`,
-      count: values.filter(v => v >= lo && v < hi).length,
-    })
+    buckets.push({ bucket: `${lo}–${hi}`, count: values.filter(v => v >= lo && v < hi).length })
   }
-  // Include the max value in the last bucket
-  if (buckets.length > 0) {
-    buckets[buckets.length - 1].count += values.filter(v => v === max).length
-  }
+  if (buckets.length > 0) buckets[buckets.length - 1].count += values.filter(v => v === max).length
   return buckets
 }
 
-/**
- * Vendor Detail Modal.
- * Fetches the selected vendor's full order history from Supabase then shows:
- *   1. Lead-time timeline (scatter: order index → actual_lead_time)
- *   2. Lead-time distribution (histogram bar chart)
- */
-function VendorModal({ vendorId, onClose }) {
-  const [history, setHistory]   = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [error,   setError]     = useState(null)
+// ── Vendor Detail Modal (3.3 + 3.4 cold-start notice) ───────────────────────
+function VendorModal({ vendorId, onClose, isColdStartVendor }) {
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState(null)
 
   useEffect(() => {
     if (!vendorId) return
@@ -270,19 +273,18 @@ function VendorModal({ vendorId, onClose }) {
         const rows = (data || [])
           .filter(r => r.actual_lead_time != null)
           .map((r, i) => ({
-            index:    i + 1,
-            lt:       Number(r.actual_lead_time),
-            po_id:    r.po_id,
-            date:     r.order_date ? r.order_date.slice(0, 10) : `#${i + 1}`,
-            muL:      Number(r.predicted_mu_l)    || 0,
-            sigmaL:   Number(r.predicted_sigma_l) || 0,
+            index:  i + 1,
+            lt:     Number(r.actual_lead_time),
+            po_id:  r.po_id,
+            date:   r.order_date ? r.order_date.slice(0, 10) : `#${i + 1}`,
+            muL:    Number(r.predicted_mu_l)    || 0,
+            sigmaL: Number(r.predicted_sigma_l) || 0,
           }))
         setHistory(rows)
         setLoading(false)
       })
   }, [vendorId])
 
-  // Derived stats
   const ltValues  = history.map(r => r.lt)
   const muL       = history[0]?.muL   ?? 0
   const sigmaL    = history[0]?.sigmaL ?? 0
@@ -313,53 +315,60 @@ function VendorModal({ vendorId, onClose }) {
   }
 
   return (
-    /* Backdrop */
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)',
-        zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '20px',
-      }}
-    >
-      {/* Panel — stop propagation so clicking inside doesn't close */}
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          backgroundColor: '#fff', borderRadius: '12px', padding: '28px 32px',
-          width: '100%', maxWidth: '860px', maxHeight: '90vh', overflowY: 'auto',
-          boxShadow: '0 20px 60px rgba(0,0,0,.25)',
-        }}
-      >
-        {/* Modal header */}
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)',
+      zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        backgroundColor: '#fff', borderRadius: '12px', padding: '28px 32px',
+        width: '100%', maxWidth: '860px', maxHeight: '90vh', overflowY: 'auto',
+        boxShadow: '0 20px 60px rgba(0,0,0,.25)',
+      }}>
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: '700' }}>
-              Vendor&nbsp;{vendorId}&nbsp;&nbsp;<RiskBadge sigmaL={sigmaL} />
+              Vendor&nbsp;{vendorId}&nbsp;&nbsp;
+              <RiskBadge sigmaL={sigmaL} coldStart={isColdStartVendor} />
             </h2>
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
-              µ_L = {muL.toFixed(2)} days&nbsp;·&nbsp;σ_L = {sigmaL.toFixed(4)}&nbsp;·&nbsp;{history.length} deliveries
+              µ_L = {muL.toFixed(2)} days · σ_L = {sigmaL.toFixed(4)} · {history.length} deliveries
             </p>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: '20px', color: '#94a3b8', lineHeight: 1, padding: '4px',
-            }}
-          >✕</button>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: '20px', color: '#94a3b8', lineHeight: 1, padding: '4px',
+          }}>✕</button>
         </div>
+
+        {/* 3.4 — Cold-start notice banner */}
+        {isColdStartVendor && (
+          <div style={{
+            backgroundColor: '#faf5ff', border: '1px solid #d8b4fe',
+            borderLeft: '4px solid #7c3aed', borderRadius: '8px',
+            padding: '12px 16px', marginBottom: '20px', fontSize: '13px', color: '#4c1d95',
+          }}>
+            <strong>⚠ Cold-start vendor</strong> — No delivery history was available when this
+            order was processed. The global fleet-average lead-time statistics
+            (µ_L, σ_L) were used as a fallback.
+            Safety stock and reorder point are conservative estimates; they will
+            automatically sharpen once this vendor accumulates real delivery records
+            and you re-run <code>run_all_orders.py</code>.
+          </div>
+        )}
 
         {loading && <p style={{ color: '#64748b' }}>Loading delivery history…</p>}
         {error   && <p style={{ color: '#dc2626' }}>Error: {error}</p>}
 
         {!loading && !error && history.length === 0 && (
-          <p style={{ color: '#94a3b8' }}>No delivery records found for this vendor.</p>
+          <p style={{ color: '#94a3b8' }}>
+            No delivery records with lead-time data found for this vendor.
+          </p>
         )}
 
         {!loading && !error && history.length > 0 && (
           <>
-            {/* ── Stat pills ── */}
+            {/* Stat pills */}
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '24px' }}>
               {[
                 ['Mean lead time',    `${muL.toFixed(2)} days`,   STATUS_COLOR[status]],
@@ -378,15 +387,15 @@ function VendorModal({ vendorId, onClose }) {
               ))}
             </div>
 
-            {/* ── Chart 1: Delivery timeline (scatter) ── */}
-            <h3 style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>
+            {/* Chart 1: Timeline */}
+            <h3 style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>
               Lead-Time Timeline
             </h3>
             <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#94a3b8' }}>
-              Each dot is one PO delivery. Dashed lines show µ_L ± σ_L bands.
+              Each dot = one PO delivery. Dashed lines show µ_L ± σ_L.
             </p>
             <ResponsiveContainer width="100%" height={220}>
-              <ScatterChart margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <ScatterChart margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="index" type="number" name="Delivery #" tick={{ fontSize: 11 }}>
                   <Label value="Delivery #" position="insideBottom" offset={-2} style={{ fontSize: 11, fill: '#94a3b8' }} />
@@ -395,31 +404,24 @@ function VendorModal({ vendorId, onClose }) {
                   <Label value="Days" angle={-90} position="insideLeft" style={{ fontSize: 11, fill: '#94a3b8' }} />
                 </YAxis>
                 <Tooltip content={<TimelineTooltip />} cursor={{ strokeDasharray: '3 3' }} />
-                {/* µ_L line */}
-                <ReferenceLine y={muL} stroke="#3b82f6" strokeWidth={1.5} label={{ value: `µ=${muL.toFixed(1)}`, position: 'right', fontSize: 10, fill: '#3b82f6' }} />
-                {/* µ_L + σ_L */}
+                <ReferenceLine y={muL} stroke="#3b82f6" strokeWidth={1.5}
+                  label={{ value: `µ=${muL.toFixed(1)}`, position: 'right', fontSize: 10, fill: '#3b82f6' }} />
                 <ReferenceLine y={muL + sigmaL} stroke={STATUS_COLOR[status]} strokeDasharray="4 3"
-                  label={{ value: `+σ`, position: 'right', fontSize: 10, fill: STATUS_COLOR[status] }} />
-                {/* µ_L - σ_L (only if positive) */}
+                  label={{ value: '+σ', position: 'right', fontSize: 10, fill: STATUS_COLOR[status] }} />
                 {muL - sigmaL > 0 && (
                   <ReferenceLine y={muL - sigmaL} stroke={STATUS_COLOR[status]} strokeDasharray="4 3"
-                    label={{ value: `-σ`, position: 'right', fontSize: 10, fill: STATUS_COLOR[status] }} />
+                    label={{ value: '-σ', position: 'right', fontSize: 10, fill: STATUS_COLOR[status] }} />
                 )}
-                <Scatter
-                  data={history}
-                  fill={STATUS_COLOR[status]}
-                  fillOpacity={0.7}
-                  r={4}
-                />
+                <Scatter data={history} fill={STATUS_COLOR[status]} fillOpacity={0.7} r={4} />
               </ScatterChart>
             </ResponsiveContainer>
 
-            {/* ── Chart 2: Distribution histogram ── */}
-            <h3 style={{ margin: '24px 0 8px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>
+            {/* Chart 2: Distribution histogram */}
+            <h3 style={{ margin: '24px 0 4px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>
               Lead-Time Distribution
             </h3>
             <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#94a3b8' }}>
-              Frequency of each lead-time bucket (1-day bins). A wider spread = higher σ_L = more holding cost.
+              1-day bins. Wider spread = higher σ_L = more holding cost needed.
             </p>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={histogram} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
@@ -449,7 +451,7 @@ export default function App() {
   const [loading,        setLoading]        = useState(true)
   const [filter,         setFilter]         = useState('ALL')
   const [search,         setSearch]         = useState('')
-  const [selectedVendor, setSelectedVendor] = useState(null)  // 3.3: selected vendor ID for modal
+  const [selectedVendor, setSelectedVendor] = useState(null)
 
   useEffect(() => { fetchOrders() }, [])
 
@@ -475,15 +477,22 @@ export default function App() {
   const openVendor  = useCallback(vid => setSelectedVendor(vid), [])
   const closeVendor = useCallback(() => setSelectedVendor(null), [])
 
-  // Close modal on Escape
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') closeVendor() }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [closeVendor])
 
+  // Determine if the currently-selected vendor is a cold-start vendor
+  // (any of its orders has a COLD_ risk_status)
+  const selectedVendorIsColdStart = selectedVendor
+    ? orders.some(o => String(o.vendor_id) === selectedVendor && isColdStart(o))
+    : false
+
   // Client-side filter + search
+  // 'COLD' filter tab shows only cold-start rows
   const visible = orders.filter(o => {
+    if (filter === 'COLD') return isColdStart(o)
     if (filter !== 'ALL' && riskStatus(o.predicted_sigma_l) !== filter) return false
     if (search) {
       const q = search.toLowerCase()
@@ -518,23 +527,26 @@ export default function App() {
         </div>
       ) : (
         <>
-          {/* Summary KPI cards */}
           <SummaryBar orders={orders} />
-
-          {/* 3.3 — Vendor ranking chart */}
           <VendorRankingChart orders={orders} onSelect={openVendor} />
 
-          {/* Toolbar */}
+          {/* Toolbar — includes COLD filter tab (3.4) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-            {['ALL', 'CRITICAL', 'WARNING', 'NORMAL'].map(f => (
+            {['ALL', 'CRITICAL', 'WARNING', 'NORMAL', 'COLD'].map(f => (
               <button key={f} onClick={() => setFilter(f)} style={{
                 padding: '6px 16px', borderRadius: '6px', border: '1px solid',
                 cursor: 'pointer', fontWeight: filter === f ? '700' : '400', fontSize: '13px',
-                borderColor: filter === f ? '#3b82f6' : '#cbd5e1',
-                backgroundColor: filter === f ? '#eff6ff' : '#fff',
-                color: filter === f ? '#1d4ed8' : '#475569',
+                borderColor: filter === f
+                  ? (f === 'COLD' ? '#7c3aed' : '#3b82f6')
+                  : '#cbd5e1',
+                backgroundColor: filter === f
+                  ? (f === 'COLD' ? '#faf5ff' : '#eff6ff')
+                  : '#fff',
+                color: filter === f
+                  ? (f === 'COLD' ? '#6d28d9' : '#1d4ed8')
+                  : '#475569',
               }}>
-                {f}
+                {f === 'COLD' ? '⚠ Cold-start' : f}
               </button>
             ))}
             <input
@@ -564,20 +576,20 @@ export default function App() {
               </thead>
               <tbody>
                 {visible.map((order, i) => {
-                  const money  = financials(order)
-                  const status = riskStatus(order.predicted_sigma_l)
-                  const rowBg  = status === 'CRITICAL'
-                    ? (i % 2 === 0 ? '#fff5f5' : '#fff8f8')
-                    : i % 2 === 0 ? '#ffffff' : '#f8fafc'
+                  const money   = financials(order)
+                  const status  = riskStatus(order.predicted_sigma_l)
+                  const cold    = isColdStart(order)
+                  const rowBg   = cold
+                    ? (i % 2 === 0 ? '#faf5ff' : '#f5f0ff')   // faint purple for cold-start rows
+                    : status === 'CRITICAL'
+                      ? (i % 2 === 0 ? '#fff5f5' : '#fff8f8')
+                      : i % 2 === 0 ? '#ffffff' : '#f8fafc'
 
                   return (
-                    <tr
-                      key={order.po_id}
-                      style={{ backgroundColor: rowBg, borderBottom: '1px solid #f1f5f9' }}
-                    >
+                    <tr key={order.po_id} style={{ backgroundColor: rowBg, borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '11px 14px', fontWeight: '500', fontFamily: 'monospace' }}>{order.po_id}</td>
 
-                      {/* Vendor ID — clickable to open chart modal */}
+                      {/* Vendor ID — clickable */}
                       <td style={{ padding: '11px 14px' }}>
                         <button
                           onClick={() => openVendor(String(order.vendor_id))}
@@ -619,16 +631,14 @@ export default function App() {
                               {formatMoney(money.costOfRisk)} at risk
                             </div>
                             <div style={{ color: '#94a3b8', fontSize: '11.5px', marginTop: '2px' }}>
-                              Buffer&nbsp;{formatMoney(money.capitalLocked)}
-                              &nbsp;·&nbsp;
-                              stockout&nbsp;{formatMoney(money.stockoutPerDay)}/day
+                              Buffer&nbsp;{formatMoney(money.capitalLocked)}&nbsp;·&nbsp;stockout&nbsp;{formatMoney(money.stockoutPerDay)}/day
                             </div>
                           </>
                         )}
                       </td>
 
                       <td style={{ padding: '11px 14px' }}>
-                        <RiskBadge sigmaL={order.predicted_sigma_l} />
+                        <RiskBadge sigmaL={order.predicted_sigma_l} coldStart={cold} />
                       </td>
                     </tr>
                   )
@@ -645,18 +655,20 @@ export default function App() {
 
           {/* Footer */}
           <p style={{ marginTop: '16px', fontSize: '12px', color: '#94a3b8' }}>
-            Financial impact:&nbsp;
-            <em>Cost of risk = σ_L × µ_d × unit_price</em>&nbsp;·&nbsp;
-            <em>Capital locked = SS × unit_price</em>&nbsp;·&nbsp;
-            µ_d derived as (ROP − SS) / µ_L.&nbsp;
-            Click any <strong>Vendor ID</strong> to view its delivery history charts.
+            Financial impact: <em>Cost of risk = σ_L × µ_d × unit_price</em> · <em>Capital locked = SS × unit_price</em> · µ_d = (ROP − SS) / µ_L.
+            &nbsp;Click any <strong>Vendor ID</strong> to view delivery charts.
+            &nbsp;<strong>Cold-start</strong> vendors use the global fleet average until real deliveries accumulate.
           </p>
         </>
       )}
 
-      {/* 3.3 — Vendor detail modal (rendered at root so it overlays the full page) */}
+      {/* Vendor detail modal */}
       {selectedVendor && (
-        <VendorModal vendorId={selectedVendor} onClose={closeVendor} />
+        <VendorModal
+          vendorId={selectedVendor}
+          onClose={closeVendor}
+          isColdStartVendor={selectedVendorIsColdStart}
+        />
       )}
     </div>
   )
