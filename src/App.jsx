@@ -5,7 +5,8 @@ import {
   ScatterChart, Scatter, ReferenceLine, Label,
 } from 'recharts'
 
-// ── Supabase connection ──────────────────────────────────────────────────────
+// ── Supabase & Node.js API Gateway connections ──────────────────────────────
+const nodeApiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? 'https://bcnhsbkznrebqchaihbo.supabase.co'
 const supabaseKey = import.meta.env.VITE_SUPABASE_KEY ?? 'sb_publishable_5hxw_O-rS0zP4OtAQ5vnsQ__3XzOocl'
 const supabase = createClient(supabaseUrl, supabaseKey)
@@ -1104,6 +1105,8 @@ export default function App() {
 
   // ── 3.7: Prescriptive Mitigation state ──
   const [selectedMitigationOrder, setSelectedMitigationOrder] = useState(null)
+  // ── 4.1: Gateway connection indicator ──
+  const [gatewayConnected, setGatewayConnected] = useState(false)
 
   // ── 3.6: Scenario state ──
   const [scenario, setScenario] = useState({
@@ -1117,16 +1120,38 @@ export default function App() {
   const fetchOrders = useCallback(async () => {
     setLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price')
-        .gt('safety_stock', 0)
-        .order('predicted_sigma_l', { ascending: false })
-        .limit(500)
-      if (error) throw error
-      setOrders(data || [])
+      let fetchedOrders = null
+
+      // 1. Try Node.js API Gateway (Sprint 4.1 Architecture)
+      try {
+        const res = await fetch(`${nodeApiUrl}/api/orders?limit=500`, { signal: AbortSignal.timeout(2000) })
+        if (res.ok) {
+          const json = await res.json()
+          if (json && Array.isArray(json.orders)) {
+            fetchedOrders = json.orders
+            setGatewayConnected(true)
+          }
+        }
+      } catch {
+        // Node API Gateway not running locally, smoothly fallback to direct Supabase
+        setGatewayConnected(false)
+      }
+
+      // 2. Direct Supabase fallback
+      if (!fetchedOrders) {
+        const { data, error } = await supabase
+          .from('orders')
+          .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price')
+          .gt('safety_stock', 0)
+          .order('predicted_sigma_l', { ascending: false })
+          .limit(500)
+        if (error) throw error
+        fetchedOrders = data || []
+      }
+
+      setOrders(fetchedOrders)
     } catch (err) {
-      console.error('Supabase error:', err.message)
+      console.error('Data fetch error:', err.message)
       alert('Database error: ' + err.message)
     } finally {
       setLoading(false)
@@ -1195,9 +1220,25 @@ export default function App() {
       {/* Header */}
       <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 style={{ margin: '0 0 6px', fontSize: '24px', fontWeight: '700' }}>
-            Supply Chain Risk Dashboard
-          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <h1 style={{ margin: '0 0 6px', fontSize: '24px', fontWeight: '700' }}>
+              Supply Chain Risk Dashboard
+            </h1>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+              backgroundColor: gatewayConnected ? '#f0fdf4' : '#f8fafc',
+              color: gatewayConnected ? '#166534' : '#64748b',
+              border: `1px solid ${gatewayConnected ? '#bbf7d0' : '#e2e8f0'}`,
+              padding: '2px 9px', borderRadius: '9999px', fontSize: '11px', fontWeight: '600',
+              marginBottom: '4px',
+            }}>
+              <span style={{
+                width: '6px', height: '6px', borderRadius: '50%',
+                backgroundColor: gatewayConnected ? '#22c55e' : '#94a3b8',
+              }} />
+              {gatewayConnected ? 'Node.js Gateway Active (:5000)' : 'Direct Cloud DB'}
+            </span>
+          </div>
           <p style={{ margin: 0, color: '#64748b', fontSize: '14px' }}>
             Order-level lead-time variance · risk-adjusted safety stock · financial cost of delay · prescriptive mitigation
           </p>

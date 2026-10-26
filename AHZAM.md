@@ -352,16 +352,94 @@ pm run dev � open the dashboard.
 
 ---
 
+# Sprint 4: Enterprise Ingestion, Spend Analytics & Cloud Architecture
+
+Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platform to fulfill the comprehensive enterprise audit requirements:
+
+- **4.1: Cloud Architecture & Node.js API Gateway** (Status: complete)
+- **4.2: Data Ingestion, Row-Level Validation & Error Quarantine** (Status: upcoming)
+- **4.3: Core Spend Analytics & Vendor Concentration Dashboard** (Status: upcoming)
+- **4.4: Vendor Historical Scorecards & On-Time Performance Scoring** (Status: upcoming)
+
+---
+
+## 4.1 Cloud Architecture & Node.js API Gateway
+
+**Status:** complete
+
+### What was done
+
+1. **Dedicated Node.js Express API Gateway (`server/index.js`)**
+   - Implemented an Express API Gateway server running on port 5000 (`NODE_PORT=5000`).
+   - Acts as the central middleware layer connecting the React 19 frontend to Supabase and the Python FastAPI ML microservice.
+   - Built endpoints:
+     - `GET /health`: Multi-tier health check verifying gateway status, process version, Supabase PostgreSQL reachability, and Python FastAPI microservice connectivity.
+     - `GET /api/orders`: Query orders with pagination (`limit`) and risk status filtering from Supabase.
+     - `GET /api/orders/:id`: Query individual purchase order details.
+     - `POST /api/ml/analyze_risk`: Proxies risk inference requests to Python FastAPI (`http://localhost:8000/api/analyze_risk`).
+     - `POST /api/ml/simulate_scenario`: Proxies What-If scenario simulations.
+     - `POST /api/ml/recommend_alternatives`: Proxies prescriptive supplier alternative recommendations.
+     - `GET /api/ml/global_stats`: Proxies fleet-average lead-time fallback statistics.
+2. **Client-Side Architectural Integration (`src/App.jsx`)**
+   - Configured `VITE_API_URL` to point to the Node.js API Gateway (`http://localhost:5000`).
+   - Implemented resilient dual-channel fetching:
+     - React attempts to fetch orders through the Node.js API Gateway first.
+     - If the Node.js gateway is offline during client-only development, it automatically and gracefully falls back to the direct Supabase cloud client.
+   - Added visual **Architecture Status Indicator** in the dashboard header:
+     - Displays `Node.js Gateway Active (:5000)` with a green indicator when routed through Node.js Express.
+     - Displays `Direct Cloud DB` when running client-only.
+3. **Environment & Scripts Configuration**
+   - Updated `package.json` with `"server": "node server/index.js"`.
+   - Updated `.env` and `.env.example` with `NODE_PORT=5000` and `VITE_API_URL=http://localhost:5000`.
+
+### Why it was done this way
+
+- **Fulfills Required 3-Tier Enterprise Cloud Architecture.** Connecting React 19 -> Node.js API -> Supabase Database <-> Python ML Microservice establishes a decoupled microservice architecture:
+  - React handles interactive visualization and responsive state.
+  - Node.js handles data ingestion, API routing, validation, and security.
+  - Supabase handles persistent relational PostgreSQL storage.
+  - Python FastAPI handles intensive actuarial, statistical, and ML computations.
+- **Resilient Fallback Design.** In academic demos and local evaluation, running three concurrent servers can occasionally result in port conflicts. Enabling seamless direct database fallback ensures the dashboard never renders a blank screen if the developer temporarily shuts down the Node gateway.
+
+### How to verify
+
+1. **Start the Complete 3-Tier Stack:**
+   - Terminal 1 (Python ML Engine): `python -m uvicorn ml_service:app --host 127.0.0.1 --port 8000`
+   - Terminal 2 (Node.js API Gateway): `npm run server` (runs on http://localhost:5000)
+   - Terminal 3 (React Client): `npm run dev` (runs on http://localhost:5173)
+2. **Test Node.js Gateway Health:**
+   - `curl http://localhost:5000/health`
+   - Expect JSON showing:
+     ```json
+     {
+       "status": "ok",
+       "gateway": "Node.js Express API Gateway (v1.0.0)",
+       "architecture": {
+         "client": "React 19 SPA",
+         "gateway": "Node.js Express (Port 5000)",
+         "database": { "provider": "Supabase PostgreSQL", "status": "connected" },
+         "ml_microservice": { "url": "http://127.0.0.1:8000", "status": "connected" }
+       }
+     }
+     ```
+3. **Verify Dashboard Connectivity:**
+   - Open `http://localhost:5173`.
+   - In the header, confirm the green badge `Node.js Gateway Active (:5000)` is visible.
+
+---
+
 ## Roadmap completion summary
 
-All seven MVP sections (3.1 to 3.7) are complete:
-
-| Section | Feature | Key Artifacts |
-|---|---|---|
-| **3.1** | Dynamic demand calculation | `ml_service.py` (`sku_daily_demand`, combined SS formula) |
-| **3.2** | Financial cost of risk | `ml_service.py` (`cost_of_risk_metrics`), `App.jsx` (`financials`, SummaryBar) |
-| **3.3** | Interactive vendor charts | `App.jsx` (`VendorRankingChart`, `VendorModal` timeline & histogram via Recharts) |
-| **3.4** | Cold-start vendor fallback | `ml_service.py` (`_global_lead_time_stats`, `COLD_` prefix), `App.jsx` badges & modal banner |
-| **3.5** | Cloud deployment & CI/CD | `.env.example`, `Dockerfile`, `render.yaml`, `vercel.json`, `.github/workflows/ci.yml` |
-| **3.6** | What-If Simulation & CSV Export | `ml_service.py` (`/api/simulate_scenario`), `App.jsx` (`ScenarioSimulatorPanel`, `exportOrdersToCSV`) |
-| **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.jsx` (`MitigationModal`, `findAlternativeSuppliers`) |
+| Section | Feature | Key Artifacts | Status |
+|---|---|---|---|
+| **3.1** | Dynamic demand calculation | `ml_service.py` (`sku_daily_demand`, combined SS formula) | Complete |
+| **3.2** | Financial cost of risk | `ml_service.py` (`cost_of_risk_metrics`), `App.jsx` (`financials`, SummaryBar) | Complete |
+| **3.3** | Interactive vendor charts | `App.jsx` (`VendorRankingChart`, `VendorModal` timeline & histogram via Recharts) | Complete |
+| **3.4** | Cold-start vendor fallback | `ml_service.py` (`_global_lead_time_stats`, `COLD_` prefix), `App.jsx` badges & modal banner | Complete |
+| **3.5** | Cloud deployment & CI/CD | `.env.example`, `Dockerfile`, `render.yaml`, `vercel.json`, `.github/workflows/ci.yml` | Complete |
+| **3.6** | What-If Simulation & CSV Export | `ml_service.py` (`/api/simulate_scenario`), `App.jsx` (`ScenarioSimulatorPanel`, `exportOrdersToCSV`) | Complete |
+| **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.jsx` (`MitigationModal`, `findAlternativeSuppliers`) | Complete |
+| **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), `App.jsx` Gateway route | Complete |
+| **4.2** | Data Ingestion, Row Validation & Quarantine | File upload UI, row-level validation schema, quarantine CSV error report | Upcoming |
+| **4.3** | Core Spend Analytics & Vendor Concentration | Spend by category/vendor/period, HHI concentration, spend reconciliation | Upcoming |
+| **4.4** | Vendor Historical Scorecards & On-Time Scoring | On-time delivery rate %, average delay days vs promised, scorecard view | Upcoming |
