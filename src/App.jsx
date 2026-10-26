@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ScatterChart, Scatter, ReferenceLine, Label,
 } from 'recharts'
+import DataIngestionModal from './DataIngestionModal.jsx'
 
 // ── Supabase & Node.js API Gateway connections ──────────────────────────────
 const nodeApiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -1107,6 +1108,8 @@ export default function App() {
   const [selectedMitigationOrder, setSelectedMitigationOrder] = useState(null)
   // ── 4.1: Gateway connection indicator ──
   const [gatewayConnected, setGatewayConnected] = useState(false)
+  // ── 4.2: Data Ingestion Modal state ──
+  const [ingestModalOpen, setIngestModalOpen] = useState(false)
 
   // ── 3.6: Scenario state ──
   const [scenario, setScenario] = useState({
@@ -1244,8 +1247,22 @@ export default function App() {
           </p>
         </div>
 
-        {/* 3.6 & 3.7 Top Actions */}
+        {/* 3.6, 3.7 & 4.2 Top Actions */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setIngestModalOpen(true)}
+            style={{
+              padding: '8px 16px', borderRadius: '7px', fontSize: '13px', fontWeight: '700',
+              cursor: 'pointer', transition: 'all 0.2s',
+              backgroundColor: '#0284c7', color: '#fff', border: '1.5px solid #0284c7',
+              boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+            }}
+            title="Upload CSV / Excel purchase order data with validation quarantine"
+          >
+            📥 Ingest Orders
+          </button>
+
           <button
             onClick={() => setScenario(prev => ({ ...prev, enabled: !prev.enabled }))}
             style={{
@@ -1501,6 +1518,15 @@ export default function App() {
           onClose={() => setSelectedMitigationOrder(null)}
         />
       )}
+
+      {/* 4.2: Data Ingestion & Quarantine Pipeline Modal */}
+      <DataIngestionModal
+        isOpen={ingestModalOpen}
+        onClose={() => setIngestModalOpen(false)}
+        onIngestSuccess={fetchOrders}
+        nodeApiUrl={nodeApiUrl}
+        supabase={supabase}
+      />
     </div>
   )
 }

@@ -357,7 +357,7 @@ pm run dev � open the dashboard.
 Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platform to fulfill the comprehensive enterprise audit requirements:
 
 - **4.1: Cloud Architecture & Node.js API Gateway** (Status: complete)
-- **4.2: Data Ingestion, Row-Level Validation & Error Quarantine** (Status: upcoming)
+- **4.2: Data Ingestion, Row-Level Validation & Error Quarantine** (Status: complete)
 - **4.3: Core Spend Analytics & Vendor Concentration Dashboard** (Status: upcoming)
 - **4.4: Vendor Historical Scorecards & On-Time Performance Scoring** (Status: upcoming)
 
@@ -428,6 +428,62 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 
 ---
 
+## 4.2 Data Ingestion, Row-Level Validation & Error Quarantine
+
+**Status:** complete
+
+### What was done
+
+1. **Row-Level Validation Engine (`validateOrderRow`) in `server/index.js` & Client Fallback**
+   - Implemented strict row-level schema inspection ensuring dirty or malformed records never contaminate the ML analytics database:
+     - **Header Normalization**: Case-insensitive aliases (e.g. `poid` / `ordernumber`, `qty` / `units`, `cost` / `unitprice`, `leadtime` / `deliverydays`).
+     - **Mandatory Identifiers**: Verifies presence of non-empty `po_id`, `vendor_id`, and `sku_id`.
+     - **Numeric Range Checks**: Verifies `quantity > 0` (strictly positive integer/float), `unit_price >= 0` (non-negative currency value), and `actual_lead_time >= 0` (non-negative delivery span).
+     - **Date Parsing**: Robust conversion of string or Date timestamps into standardized ISO `YYYY-MM-DD` strings with format verification.
+   - Designed parallel client-side validator (`validateRowClient`) in `src/DataIngestionModal.jsx` to guarantee offline and zero-latency in-browser parsing.
+
+2. **Backend Multipart Ingestion & Batch Commit Routes (`server/index.js`)**
+   - Installed `xlsx` (SheetJS) and `multer` for multi-format ingestion.
+   - `POST /api/ingest/upload`: Accepts `.csv`, `.xlsx`, and `.xls` multipart buffers (up to 15MB) or direct JSON arrays. Parses sheets and categorizes every record into either `valid_rows` or `quarantined_rows` with annotated error messages (`quarantine_errors`).
+   - `POST /api/ingest/confirm`: Batch commits and upserts only verified clean rows into Supabase `orders` table with idempotency on conflict `po_id`.
+   - `GET /api/ingest/sample-csv`: Provides an immediate reference template populated with 3 valid orders and 2 intentional error rows (missing vendor ID, negative quantity, negative unit price) to demonstrate quarantine functionality.
+
+3. **Frontend Ingestion & Quarantine Action Center (`src/DataIngestionModal.jsx` & `src/App.jsx`)**
+   - Added **`📥 Ingest Orders`** action button to the dashboard top header.
+   - Built interactive drag-and-drop file dropzone accepting CSV and Excel files.
+   - Added **"📄 Download Sample Template"** button for quick user onboarding.
+   - Built Live Validation Inspection Panel:
+     - Real-time stat counters: **Total Uploaded Rows**, **Valid Clean Rows** (green), and **Quarantined Errors** (red).
+     - Tabbed dual-view interface:
+       - **🚨 Quarantined Rows Table**: Outlines exact line numbers, PO identifiers, offending cell values, and highlighted red error callout badges detailing specific validation constraint violations (e.g., `Missing mandatory field: 'vendor_id'`, `Invalid quantity '-10': must be a positive number (> 0)`).
+       - **✓ Clean Valid Rows Table**: Interactive preview of clean records ready for engine ingestion.
+   - Added **`📥 Download Quarantine Error Report (CSV)`** button: Exports quarantined records with `ROW_NUMBER` and `QUARANTINE_ERROR_REASON` columns as an audit trail for suppliers.
+   - Added **`✓ Ingest Clean Orders`** button: Commits clean rows to database and triggers automatic live refresh of the dashboard order list.
+
+### Why it was done this way
+
+- **Garbage-In, Garbage-Out Prevention in ML Engines.** Actuarial safety stock formulas and machine learning regressors fail catastrophically when presented with negative quantities, null unit prices, or missing supplier keys. Row-level validation guarantees data hygiene before records ever touch the database or ML models.
+- **Enterprise Quarantine vs. Silent Drop.** In enterprise ERP workflows (SAP, Oracle NetSuite), discarding corrupt records silently is unacceptable because purchasing managers lose visibility of lost orders. Isolating bad rows into a quarantine queue with an exportable error report provides a transparent audit trail to send back to suppliers or vendors for remediation.
+- **Support for Both CSV and Excel Formats.** Procurement teams primarily work with `.xlsx` spreadsheets rather than plain `.csv`. Using SheetJS enables parsing both formats natively with zero client-side setup.
+
+### How to verify
+
+1. **Verify Sample CSV Download & Upload:**
+   - Open dashboard at `http://localhost:5173`.
+   - Click **`📥 Ingest Orders`** in the top action bar.
+   - Click **`📄 Download Sample Template`**; inspect the downloaded file to note intentional negative quantities and missing supplier IDs on test rows.
+   - Drag and drop the downloaded file back into the dropzone.
+2. **Inspect Quarantine Isolation:**
+   - Confirm that the modal displays **Total Uploaded: 7**, **Valid Clean Rows: 5**, and **Quarantined Errors: 2**.
+   - In the **🚨 Quarantined Rows** tab, verify line #5 highlights `Invalid quantity '-10': must be a positive number (> 0)`, and line #6 highlights `Missing mandatory field: 'vendor_id'; Invalid unit_price '-5': must be non-negative (>= 0)`.
+   - Click **`📥 Download Quarantine Error Report (CSV)`** and confirm the exported file contains the specific error reasons.
+3. **Commit Clean Rows:**
+   - Switch to the **✓ Clean Valid Rows** tab and preview the clean orders.
+   - Click **`✓ Ingest 5 Clean Orders`**.
+   - Verify success confirmation appears, modal closes, and dashboard order list reactively updates.
+
+---
+
 ## Roadmap completion summary
 
 | Section | Feature | Key Artifacts | Status |
@@ -440,6 +496,6 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 | **3.6** | What-If Simulation & CSV Export | `ml_service.py` (`/api/simulate_scenario`), `App.jsx` (`ScenarioSimulatorPanel`, `exportOrdersToCSV`) | Complete |
 | **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.jsx` (`MitigationModal`, `findAlternativeSuppliers`) | Complete |
 | **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), `App.jsx` Gateway route | Complete |
-| **4.2** | Data Ingestion, Row Validation & Quarantine | File upload UI, row-level validation schema, quarantine CSV error report | Upcoming |
+| **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, `App.jsx`, quarantine error CSV | Complete |
 | **4.3** | Core Spend Analytics & Vendor Concentration | Spend by category/vendor/period, HHI concentration, spend reconciliation | Upcoming |
 | **4.4** | Vendor Historical Scorecards & On-Time Scoring | On-time delivery rate %, average delay days vs promised, scorecard view | Upcoming |
