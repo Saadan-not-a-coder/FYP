@@ -48,6 +48,14 @@ class AnalyzeRequest(BaseModel):
     po_id: str
 
 
+class ScenarioRequest(BaseModel):
+    po_id: str
+    service_level_z: float | None = 1.65
+    lead_time_delay_days: float | None = 0.0
+    lead_time_volatility_multiplier: float | None = 1.0
+    demand_multiplier: float | None = 1.0
+
+
 # ── Module-level cache for the global fleet statistics ───────────────────────
 # Populated on the first call to _global_lead_time_stats() and kept for the
 # lifetime of the process.  Call /api/reset_global_cache to invalidate.
@@ -176,9 +184,9 @@ def vendor_lead_time_stats(vendor_id: str) -> tuple[float, float, int]:
     return mean(lead_times), pstdev(lead_times), len(lead_times)
 
 
-def safety_stock(mu_d: float, sigma_d: float, mu_l: float, sigma_l: float) -> float:
-    """Classic independent demand + lead-time safety stock."""
-    return Z_SCORE * ((mu_l * (sigma_d ** 2)) + ((mu_d ** 2) * (sigma_l ** 2))) ** 0.5
+def safety_stock(mu_d: float, sigma_d: float, mu_l: float, sigma_l: float, z: float = Z_SCORE) -> float:
+    """Classic independent demand + lead-time safety stock with configurable service level Z."""
+    return z * ((mu_l * (sigma_d ** 2)) + ((mu_d ** 2) * (sigma_l ** 2))) ** 0.5
 
 
 def cost_of_risk_metrics(
@@ -317,6 +325,102 @@ def analyze_risk(payload: AnalyzeRequest):
         **money,
         "formula":              "SS = Z * sqrt(µ_L * σ_d^2 + µ_d^2 * σ_L^2)",
         "cost_of_risk_formula": "cost_of_risk = σ_L * µ_d * unit_price",
+    }
+
+
+@app.post("/api/simulate_scenario")
+def simulate_scenario(payload: ScenarioRequest):
+    """
+    3.6: What-If Risk Simulation (Disruption & Policy Stress Testing).
+
+    Simulates safety stock, reorder point, working capital, and cost of risk
+    under configurable disruptions (lead-time delay, volatility spike,
+    demand surge, service level adjustments) without modifying the database.
+    """
+    order_rows = (
+        supabase.table("orders")
+        .select("po_id,vendor_id,sku_id,unit_price")
+        .eq("po_id", payload.po_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not order_rows:
+        raise HTTPException(status_code=404, detail=f"Order {payload.po_id} not found")
+
+    order = order_rows[0]
+    vendor_id = order["vendor_id"]
+    sku_id = order["sku_id"]
+    unit_price = float(order.get("unit_price") or 0)
+
+    # 1. Base statistics
+    mu_l, sigma_l, vendor_n = vendor_lead_time_stats(vendor_id)
+    mu_d, sigma_d, demand_days = sku_daily_demand(sku_id)
+    cold_start = vendor_n == 0
+
+    base_ss = safety_stock(mu_d, sigma_d, mu_l, sigma_l, z=Z_SCORE)
+    base_rop = (mu_d * mu_l) + base_ss
+    base_ss_units = int(round(base_ss))
+    base_rop_units = int(round(base_rop))
+    base_status = _risk_status(sigma_l)
+    base_money = cost_of_risk_metrics(base_ss_units, mu_d, sigma_l, unit_price)
+
+    # 2. Simulated statistics under disruption / policy changes
+    z_sim = float(payload.service_level_z) if payload.service_level_z is not None else Z_SCORE
+    mu_l_sim = max(0.1, mu_l + float(payload.lead_time_delay_days or 0.0))
+    vol_mult = max(0.1, float(payload.lead_time_volatility_multiplier or 1.0))
+    sigma_l_sim = sigma_l * vol_mult
+    dem_mult = max(0.1, float(payload.demand_multiplier or 1.0))
+    mu_d_sim = mu_d * dem_mult
+    sigma_d_sim = sigma_d * dem_mult
+
+    sim_ss = safety_stock(mu_d_sim, sigma_d_sim, mu_l_sim, sigma_l_sim, z=z_sim)
+    sim_rop = (mu_d_sim * mu_l_sim) + sim_ss
+    sim_ss_units = int(round(sim_ss))
+    sim_rop_units = int(round(sim_rop))
+    sim_status = _risk_status(sigma_l_sim)
+    sim_money = cost_of_risk_metrics(sim_ss_units, mu_d_sim, sigma_l_sim, unit_price)
+
+    return {
+        "po_id": payload.po_id,
+        "vendor_id": vendor_id,
+        "sku_id": sku_id,
+        "unit_price": unit_price,
+        "cold_start": cold_start,
+        "scenario_params": {
+            "service_level_z": z_sim,
+            "lead_time_delay_days": payload.lead_time_delay_days or 0.0,
+            "lead_time_volatility_multiplier": vol_mult,
+            "demand_multiplier": dem_mult,
+        },
+        "baseline": {
+            "predicted_mu_l": round(mu_l, 4),
+            "predicted_sigma_l": round(sigma_l, 4),
+            "avg_daily_demand": round(mu_d, 4),
+            "demand_sigma": round(sigma_d, 4),
+            "safety_stock": base_ss_units,
+            "reorder_point": base_rop_units,
+            "risk_status": base_status,
+            **base_money,
+        },
+        "simulated": {
+            "predicted_mu_l": round(mu_l_sim, 4),
+            "predicted_sigma_l": round(sigma_l_sim, 4),
+            "avg_daily_demand": round(mu_d_sim, 4),
+            "demand_sigma": round(sigma_d_sim, 4),
+            "safety_stock": sim_ss_units,
+            "reorder_point": sim_rop_units,
+            "risk_status": sim_status,
+            **sim_money,
+        },
+        "deltas": {
+            "safety_stock_diff": sim_ss_units - base_ss_units,
+            "reorder_point_diff": sim_rop_units - base_rop_units,
+            "capital_locked_diff": round(sim_money["capital_locked"] - base_money["capital_locked"], 2),
+            "cost_of_risk_diff": round(sim_money["cost_of_risk"] - base_money["cost_of_risk"], 2),
+            "risk_status_escalated": base_status != sim_status,
+        },
     }
 
 
