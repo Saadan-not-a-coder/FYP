@@ -124,6 +124,19 @@ export function validateOrderRow(rawRow, rowNumber) {
   }
 }
 
+export function deriveCategory(row) {
+  if (row.category && typeof row.category === 'string' && row.category.trim() !== '' && row.category.trim() !== 'General Supplies') {
+    return row.category.trim()
+  }
+  const sku = String(row.sku_id || '')
+  if (sku.startsWith('10') || sku.startsWith('1')) return 'Electronics & Tech'
+  if (sku.startsWith('20') || sku.startsWith('2')) return 'Industrial Hardware'
+  if (sku.startsWith('30') || sku.startsWith('3')) return 'Raw Materials'
+  if (sku.startsWith('40') || sku.startsWith('4')) return 'Packaging & Storage'
+  if (sku.startsWith('50') || sku.startsWith('5')) return 'Safety & Apparel'
+  return 'General Supplies'
+}
+
 // ── 1. Gateway Health & Architecture Status ──────────────────────────────────
 app.get('/health', async (req, res) => {
   let dbStatus = 'unknown'
@@ -223,10 +236,19 @@ app.post('/api/ingest/confirm', async (req, res) => {
       return res.status(400).json({ error: 'Must provide an array of validated orders to commit' })
     }
 
-    // Upsert into Supabase orders table
+    // Upsert into Supabase orders table (only allowed schema columns)
+    const allowedCols = ['po_id', 'vendor_id', 'sku_id', 'quantity', 'unit_price', 'actual_lead_time', 'order_date']
+    const cleanPayload = orders.map(o => {
+      const clean = {}
+      allowedCols.forEach(col => {
+        if (o[col] !== undefined && o[col] !== null) clean[col] = o[col]
+      })
+      return clean
+    })
+
     const { data, error } = await supabase
       .from('orders')
-      .upsert(orders, { onConflict: 'po_id' })
+      .upsert(cleanPayload, { onConflict: 'po_id' })
       .select('po_id')
 
     if (error) {
@@ -268,7 +290,7 @@ app.get('/api/orders', async (req, res) => {
 
     let query = supabase
       .from('orders')
-      .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity,category')
+      .select('po_id,vendor_id,sku_id,actual_lead_time,promised_lead_time,delay_days,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity')
       .gt('safety_stock', 0)
       .order('predicted_sigma_l', { ascending: false })
       .limit(limit)
@@ -283,9 +305,14 @@ app.get('/api/orders', async (req, res) => {
       return res.status(500).json({ error: error.message })
     }
 
+    const enriched = (data || []).map(r => ({
+      ...r,
+      category: deriveCategory(r),
+    }))
+
     res.json({
-      count: data ? data.length : 0,
-      orders: data || [],
+      count: enriched.length,
+      orders: enriched,
     })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -324,7 +351,7 @@ export function calculateSpendAnalytics(orders) {
     const price = Number(o.unit_price) >= 0 ? Number(o.unit_price) : 0
     const spend = qty * price
     const vendor = o.vendor_id ? String(o.vendor_id).trim() : 'Unknown Vendor'
-    const category = o.category ? String(o.category).trim() : 'General Supplies'
+    const category = deriveCategory(o)
 
     let period = 'Undated'
     if (o.order_date) {
@@ -465,7 +492,7 @@ app.get('/api/analytics/spend', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('orders')
-      .select('po_id,vendor_id,sku_id,quantity,unit_price,order_date,category')
+      .select('po_id,vendor_id,sku_id,quantity,unit_price,order_date,actual_lead_time,promised_lead_time,delay_days')
       .limit(2000)
 
     if (error) {
@@ -524,7 +551,8 @@ export function buildVendorScorecards(orders) {
     if (actualLt !== null && !isNaN(actualLt)) {
       v.completed_orders += 1
       v.lead_times.push(actualLt)
-      const delay = actualLt - muL
+      const promised = o.promised_lead_time != null ? Number(o.promised_lead_time) : muL
+      const delay = o.delay_days != null ? Number(o.delay_days) : (actualLt - promised)
       if (delay <= 0) {
         v.on_time_orders += 1
       } else {
@@ -619,7 +647,7 @@ app.get('/api/analytics/vendor-scorecards', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('orders')
-      .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,quantity,unit_price,risk_status')
+      .select('po_id,vendor_id,sku_id,actual_lead_time,promised_lead_time,delay_days,predicted_mu_l,predicted_sigma_l,quantity,unit_price,risk_status')
       .limit(2000)
 
     if (error) {

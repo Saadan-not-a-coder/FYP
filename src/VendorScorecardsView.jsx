@@ -46,7 +46,8 @@ function buildScorecardsFromOrders(orders) {
 
     if (actualLt !== null && !isNaN(actualLt)) {
       v.completed_orders += 1
-      const delay = actualLt - muL
+      const promised = o.promised_lead_time != null ? Number(o.promised_lead_time) : muL
+      const delay = o.delay_days != null ? Number(o.delay_days) : (actualLt - promised)
       if (delay <= 0) {
         v.on_time_orders += 1
       } else {

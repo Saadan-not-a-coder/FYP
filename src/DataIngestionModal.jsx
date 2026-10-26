@@ -262,9 +262,17 @@ export default function DataIngestionModal({
 
       // Supabase direct fallback if gateway offline
       if (!committed && supabase) {
+        const allowedCols = ['po_id', 'vendor_id', 'sku_id', 'quantity', 'unit_price', 'actual_lead_time', 'order_date']
+        const dbPayload = ingestResult.valid_rows.map(r => {
+          const clean = {}
+          allowedCols.forEach(col => {
+            if (r[col] !== undefined && r[col] !== null) clean[col] = r[col]
+          })
+          return clean
+        })
         const { error } = await supabase
           .from('orders')
-          .upsert(ingestResult.valid_rows, { onConflict: 'po_id' })
+          .upsert(dbPayload, { onConflict: 'po_id' })
 
         if (error) throw error
 

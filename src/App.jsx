@@ -30,6 +30,19 @@ function formatMoney(value) {
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 }
 
+function deriveCategory(order) {
+  if (order.category && typeof order.category === 'string' && order.category.trim() !== '' && order.category.trim() !== 'General Supplies') {
+    return order.category.trim()
+  }
+  const sku = String(order.sku_id || '')
+  if (sku.startsWith('10') || sku.startsWith('1')) return 'Electronics & Tech'
+  if (sku.startsWith('20') || sku.startsWith('2')) return 'Industrial Hardware'
+  if (sku.startsWith('30') || sku.startsWith('3')) return 'Raw Materials'
+  if (sku.startsWith('40') || sku.startsWith('4')) return 'Packaging & Storage'
+  if (sku.startsWith('50') || sku.startsWith('5')) return 'Safety & Apparel'
+  return 'General Supplies'
+}
+
 function riskStatus(sigmaL) {
   if (sigmaL > CRITICAL_THRESHOLD) return 'CRITICAL'
   if (sigmaL > WARNING_THRESHOLD)  return 'WARNING'
@@ -1164,12 +1177,15 @@ export default function App() {
       if (!fetchedOrders) {
         const { data, error } = await supabase
           .from('orders')
-          .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity,category')
+          .select('po_id,vendor_id,sku_id,actual_lead_time,promised_lead_time,delay_days,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity')
           .gt('safety_stock', 0)
           .order('predicted_sigma_l', { ascending: false })
           .limit(500)
         if (error) throw error
-        fetchedOrders = data || []
+        fetchedOrders = (data || []).map(r => ({
+          ...r,
+          category: deriveCategory(r),
+        }))
       }
 
       setOrders(fetchedOrders)
