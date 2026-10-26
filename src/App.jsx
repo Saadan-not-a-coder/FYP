@@ -5,6 +5,7 @@ import {
   ScatterChart, Scatter, ReferenceLine, Label,
 } from 'recharts'
 import DataIngestionModal from './DataIngestionModal.jsx'
+import SpendAnalyticsView from './SpendAnalyticsView.jsx'
 
 // ── Supabase & Node.js API Gateway connections ──────────────────────────────
 const nodeApiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -1110,6 +1111,8 @@ export default function App() {
   const [gatewayConnected, setGatewayConnected] = useState(false)
   // ── 4.2: Data Ingestion Modal state ──
   const [ingestModalOpen, setIngestModalOpen] = useState(false)
+  // ── 4.3: Navigation Tab state ('risk' | 'spend') ──
+  const [activeNavTab, setActiveNavTab] = useState('risk')
 
   // ── 3.6: Scenario state ──
   const [scenario, setScenario] = useState({
@@ -1144,7 +1147,7 @@ export default function App() {
       if (!fetchedOrders) {
         const { data, error } = await supabase
           .from('orders')
-          .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price')
+          .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity,category')
           .gt('safety_stock', 0)
           .order('predicted_sigma_l', { ascending: false })
           .limit(500)
@@ -1294,6 +1297,38 @@ export default function App() {
         </div>
       </div>
 
+      {/* 4.3 Navigation Tabs: Operational Risk vs Core Spend Analytics */}
+      <div style={{
+        display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0',
+      }}>
+        <button
+          onClick={() => setActiveNavTab('risk')}
+          style={{
+            padding: '10px 20px', border: 'none', background: 'none', fontSize: '14px', fontWeight: '700',
+            cursor: 'pointer',
+            borderBottom: activeNavTab === 'risk' ? '3px solid #3b82f6' : '3px solid transparent',
+            color: activeNavTab === 'risk' ? '#1d4ed8' : '#64748b',
+            display: 'inline-flex', alignItems: 'center', gap: '8px',
+            marginBottom: '-2px',
+          }}
+        >
+          🛡️ Supply Chain Risk & Mitigation
+        </button>
+        <button
+          onClick={() => setActiveNavTab('spend')}
+          style={{
+            padding: '10px 20px', border: 'none', background: 'none', fontSize: '14px', fontWeight: '700',
+            cursor: 'pointer',
+            borderBottom: activeNavTab === 'spend' ? '3px solid #0f766e' : '3px solid transparent',
+            color: activeNavTab === 'spend' ? '#0f766e' : '#64748b',
+            display: 'inline-flex', alignItems: 'center', gap: '8px',
+            marginBottom: '-2px',
+          }}
+        >
+          📊 Core Spend Analytics & Vendor Concentration
+        </button>
+      </div>
+
       {loading ? (
         <p style={{ color: '#64748b' }}>Loading data from cloud…</p>
       ) : orders.length === 0 ? (
@@ -1301,6 +1336,8 @@ export default function App() {
           <strong>No processed data found.</strong>&nbsp;
           Run the ML pipeline first: <code>python run_all_orders.py</code>
         </div>
+      ) : activeNavTab === 'spend' ? (
+        <SpendAnalyticsView orders={orders} />
       ) : (
         <>
           {/* What-If Scenario Stress-Testing Drawer */}

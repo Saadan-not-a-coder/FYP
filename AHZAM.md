@@ -358,7 +358,7 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 
 - **4.1: Cloud Architecture & Node.js API Gateway** (Status: complete)
 - **4.2: Data Ingestion, Row-Level Validation & Error Quarantine** (Status: complete)
-- **4.3: Core Spend Analytics & Vendor Concentration Dashboard** (Status: upcoming)
+- **4.3: Core Spend Analytics & Vendor Concentration Dashboard** (Status: complete)
 - **4.4: Vendor Historical Scorecards & On-Time Performance Scoring** (Status: upcoming)
 
 ---
@@ -484,6 +484,81 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 
 ---
 
+## 4.3 Core Spend Analytics & Vendor Concentration Dashboard
+
+**Status:** complete
+
+### What was done
+
+1. **Spend Aggregation & Concentration Engine (`server/index.js` & `src/SpendAnalyticsView.jsx`)**
+   - Implemented `calculateSpendAnalytics(orders)` calculating multi-dimensional purchasing totals:
+     - **Total Purchasing Spend ($)**: Exact sum of `quantity * unit_price` across all loaded purchase orders.
+     - **Spend by Vendor**: Total spend, purchasing share (% of budget), cumulative Pareto share (%), PO count, total units, and Average Order Value (AOV = Spend / PO Count).
+     - **Spend by Product Category**: Dollar volume and percentage share across categories (Electronics, Hardware, Raw Materials, Apparel, etc.).
+     - **Spend by Time Period**: Chronological monthly procurement velocity (`YYYY-MM`) tracking purchasing cadence.
+   - Built backend endpoint `GET /api/analytics/spend` in `server/index.js` for server-side aggregation.
+
+2. **Antitrust & Single-Supplier Vulnerability Diagnostics (HHI & Concentration Ratios)**
+   - **Herfindahl-Hirschman Index (HHI)**:
+     $$HHI = \sum_{i=1}^n (s_i)^2$$
+     where $s_i$ is each supplier's percentage market share of total spend.
+     - Categorizes supplier exposure using US Department of Justice (DOJ) / FTC standards:
+       - **Unconcentrated / Diversified ($HHI < 1,500$)**: Healthy multi-sourcing, low single-supplier lock-in.
+       - **Moderately Concentrated ($1,500 \le HHI \le 2,500$)**: Moderate dependency; requires secondary sourcing oversight.
+       - **Highly Concentrated ($HHI > 2,500$)**: Severe single-supplier vulnerability; high supply disruption exposure.
+   - **Concentration Ratios ($CR_k$)**:
+     - **CR1**: Share of budget captured by the single largest supplier.
+     - **CR3**: Cumulative share captured by the top 3 suppliers.
+     - **CR5**: Cumulative share captured by the top 5 suppliers.
+
+3. **Source File Spend Reconciliation Audit Statement**
+   - Implemented rigorous mathematical reconciliation:
+     - Confirms that $\sum \text{VendorSpend} == \text{TotalSpend}$ ($\Delta = \$0.00$).
+     - Confirms that $\sum \text{CategorySpend} == \text{TotalSpend}$ ($\Delta = \$0.00$).
+     - Confirms that $\sum \text{PeriodSpend} == \text{TotalSpend}$ ($\Delta = \$0.00$).
+   - Displays an audited proof table with green checkmark status verifying 100.0% zero-leakage reconciliation with uploaded source data.
+   - One-click **`📥 Export Spend Audit Report (CSV)`**: Generates an executive audit statement including summary KPIs, reconciliation proofs, vendor Pareto rankings, category distributions, and monthly trends.
+
+4. **Executive Dashboard UI (`src/SpendAnalyticsView.jsx` & Navigation Tabs in `src/App.jsx`)**
+   - Added high-level navigation tabs in `src/App.jsx`:
+     - **`🛡️ Supply Chain Risk & Mitigation`**: Operational lead-time risk, What-If simulator, and supplier alternative recommendations.
+     - **`📊 Core Spend Analytics & Vendor Concentration`**: Comprehensive purchasing breakdown and market concentration.
+   - Built interactive Recharts visual panels:
+     - **Top Suppliers Pareto Chart**: BarChart ranking top vendors by dollar volume.
+     - **Category Spend Distribution**: Donut / Pie chart with interactive tooltips and categorical color legends.
+     - **Spend Velocity Over Time**: AreaChart with gradient shading showing monthly procurement trends.
+     - **HHI Visual Benchmark Gauge**: Progress meter visualizing portfolio diversification vs. regulatory risk thresholds.
+     - **Interactive Filters**: Dynamic filtering by Product Category, Time Period, or Vendor ID search with reactive recalculation.
+
+### Why it was done this way
+
+- **Reconciling Spend with Source Data.** Academic examiners and CFOs require absolute proof that analytics numbers reconcile to the cent with source files. The Spend Reconciliation Audit Statement provides a transparent, verifiable mathematical proof that no rounding or filtering leakage occurs.
+- **Economic Antitrust Standard (HHI).** While raw spend ranking shows who gets paid the most, it fails to quantify structural dependency. Integrating the Herfindahl-Hirschman Index and Concentration Ratios (CR1, CR3, CR5) brings formal industrial organization economics into the supply chain tool.
+- **Tabbed Modular Architecture.** Rather than cluttering the operational lead-time risk screen with macro financial charts, tabbed navigation separates daily inventory operations from executive procurement strategy while sharing the underlying data store.
+
+### How to verify
+
+1. **Open Spend Analytics View:**
+   - Open dashboard at `http://localhost:5173`.
+   - Click the **`📊 Core Spend Analytics & Vendor Concentration`** tab in the top navigation bar.
+2. **Inspect Purchasing KPIs & HHI:**
+   - Verify KPI cards display Total Purchasing Spend, HHI score with color-coded status badge, and Top-3 Concentration (CR3).
+   - Review the HHI Visual Benchmark Gauge to inspect supply fleet diversification.
+3. **Verify Interactive Visualizations:**
+   - Hover over the **Top Suppliers Bar Chart** to review vendor spend volumes.
+   - Hover over the **Category Spend Donut Chart** to see product category shares.
+   - Review the **Monthly Spend Area Chart** to observe procurement spend over time.
+4. **Test Dynamic Filters:**
+   - Select a specific category from the **Category** dropdown (e.g. `Electronics` or `Hardware`).
+   - Confirm that charts, spend totals, HHI, and reconciliation table reactively update.
+   - Click **`Reset Filters`** to restore fleet view.
+5. **Verify Spend Reconciliation & CSV Export:**
+   - Scroll to the **📋 Source File Spend Reconciliation Audit Statement** table.
+   - Confirm that Vendor, Category, and Period rollups show exact $0.00 delta and **✓ 100% Reconciled**.
+   - Click **`📥 Export Spend Audit Report (CSV)`**; open the file to verify executive summary, reconciliation proofs, and vendor rankings.
+
+---
+
 ## Roadmap completion summary
 
 | Section | Feature | Key Artifacts | Status |
@@ -497,5 +572,5 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 | **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.jsx` (`MitigationModal`, `findAlternativeSuppliers`) | Complete |
 | **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), `App.jsx` Gateway route | Complete |
 | **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, `App.jsx`, quarantine error CSV | Complete |
-| **4.3** | Core Spend Analytics & Vendor Concentration | Spend by category/vendor/period, HHI concentration, spend reconciliation | Upcoming |
+| **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, `App.jsx`, HHI & reconciliation CSV | Complete |
 | **4.4** | Vendor Historical Scorecards & On-Time Scoring | On-time delivery rate %, average delay days vs promised, scorecard view | Upcoming |

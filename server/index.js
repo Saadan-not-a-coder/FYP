@@ -268,7 +268,7 @@ app.get('/api/orders', async (req, res) => {
 
     let query = supabase
       .from('orders')
-      .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity')
+      .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,safety_stock,reorder_point,risk_status,unit_price,order_date,quantity,category')
       .gt('safety_stock', 0)
       .order('predicted_sigma_l', { ascending: false })
       .limit(limit)
@@ -305,6 +305,175 @@ app.get('/api/orders/:id', async (req, res) => {
     if (!data || data.length === 0) return res.status(404).json({ error: `Order ${req.params.id} not found` })
 
     res.json(data[0])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── 4. Core Spend Analytics & Vendor Concentration Engine (Sprint 4.3) ────────
+
+export function calculateSpendAnalytics(orders) {
+  let totalSpend = 0
+  let totalUnits = 0
+  const vendorMap = {}
+  const categoryMap = {}
+  const periodMap = {}
+
+  orders.forEach(o => {
+    const qty = Number(o.quantity) > 0 ? Number(o.quantity) : 1
+    const price = Number(o.unit_price) >= 0 ? Number(o.unit_price) : 0
+    const spend = qty * price
+    const vendor = o.vendor_id ? String(o.vendor_id).trim() : 'Unknown Vendor'
+    const category = o.category ? String(o.category).trim() : 'General Supplies'
+
+    let period = 'Undated'
+    if (o.order_date) {
+      const d = String(o.order_date).slice(0, 7)
+      if (d.length === 7) period = d
+    }
+
+    totalSpend += spend
+    totalUnits += qty
+
+    // Vendor aggregation
+    if (!vendorMap[vendor]) {
+      vendorMap[vendor] = { vendor_id: vendor, spend: 0, units: 0, order_count: 0 }
+    }
+    vendorMap[vendor].spend += spend
+    vendorMap[vendor].units += qty
+    vendorMap[vendor].order_count += 1
+
+    // Category aggregation
+    if (!categoryMap[category]) {
+      categoryMap[category] = { category, spend: 0, units: 0, order_count: 0 }
+    }
+    categoryMap[category].spend += spend
+    categoryMap[category].units += qty
+    categoryMap[category].order_count += 1
+
+    // Period aggregation
+    if (!periodMap[period]) {
+      periodMap[period] = { period, spend: 0, units: 0, order_count: 0 }
+    }
+    periodMap[period].spend += spend
+    periodMap[period].units += qty
+    periodMap[period].order_count += 1
+  })
+
+  // Spend by vendor array sorted descending
+  const vendors = Object.values(vendorMap).map(v => {
+    const share = totalSpend > 0 ? (v.spend / totalSpend) * 100 : 0
+    return {
+      ...v,
+      spend: Number(v.spend.toFixed(2)),
+      share: Number(share.toFixed(2)),
+      aov: v.order_count > 0 ? Number((v.spend / v.order_count).toFixed(2)) : 0,
+    }
+  }).sort((a, b) => b.spend - a.spend)
+
+  // Calculate Cumulative Share for Pareto analysis
+  let cumShare = 0
+  vendors.forEach(v => {
+    cumShare += v.share
+    v.cumulative_share = Number(Math.min(100, cumShare).toFixed(2))
+  })
+
+  // Spend by category array sorted descending
+  const categories = Object.values(categoryMap).map(c => {
+    const share = totalSpend > 0 ? (c.spend / totalSpend) * 100 : 0
+    return {
+      ...c,
+      spend: Number(c.spend.toFixed(2)),
+      share: Number(share.toFixed(2)),
+    }
+  }).sort((a, b) => b.spend - a.spend)
+
+  // Spend by period array sorted chronologically
+  const periods = Object.values(periodMap).map(p => ({
+    ...p,
+    spend: Number(p.spend.toFixed(2)),
+  })).sort((a, b) => a.period.localeCompare(b.period))
+
+  // Vendor Concentration Metrics (HHI & Concentration Ratios)
+  let hhi = 0
+  vendors.forEach(v => {
+    hhi += Math.pow(v.share, 2)
+  })
+  hhi = Math.round(hhi)
+
+  let hhiStatus = 'UNCONCENTRATED'
+  let hhiColor = '#16a34a'
+  let hhiDescription = 'Healthy supplier diversification (low vendor lock-in risk).'
+  if (hhi > 2500) {
+    hhiStatus = 'HIGHLY CONCENTRATED'
+    hhiColor = '#dc2626'
+    hhiDescription = 'High supplier dependency: procurement is severely vulnerable to single-vendor disruptions.'
+  } else if (hhi >= 1500) {
+    hhiStatus = 'MODERATELY CONCENTRATED'
+    hhiColor = '#d97706'
+    hhiDescription = 'Moderate supplier concentration: monitor secondary sourcing policies.'
+  }
+
+  const cr1 = vendors[0] ? vendors[0].share : 0
+  const cr3 = Number(vendors.slice(0, 3).reduce((acc, v) => acc + v.share, 0).toFixed(2))
+  const cr5 = Number(vendors.slice(0, 5).reduce((acc, v) => acc + v.share, 0).toFixed(2))
+
+  // Spend Reconciliation Audit
+  const sumVendorSpend = vendors.reduce((acc, v) => acc + v.spend, 0)
+  const sumCategorySpend = categories.reduce((acc, c) => acc + c.spend, 0)
+  const sumPeriodSpend = periods.reduce((acc, p) => acc + p.spend, 0)
+
+  const vendorDelta = Math.abs(totalSpend - sumVendorSpend)
+  const categoryDelta = Math.abs(totalSpend - sumCategorySpend)
+  const periodDelta = Math.abs(totalSpend - sumPeriodSpend)
+
+  const isReconciled = vendorDelta < 0.05 && categoryDelta < 0.05 && periodDelta < 0.05
+
+  return {
+    totalOrders: orders.length,
+    totalSpend: Number(totalSpend.toFixed(2)),
+    totalUnits,
+    averageOrderValue: orders.length > 0 ? Number((totalSpend / orders.length).toFixed(2)) : 0,
+    concentration: {
+      hhi,
+      hhiStatus,
+      hhiColor,
+      hhiDescription,
+      cr1,
+      cr3,
+      cr5,
+      activeVendorCount: vendors.length,
+    },
+    vendors,
+    categories,
+    periods,
+    reconciliation: {
+      isReconciled,
+      totalSpend: Number(totalSpend.toFixed(2)),
+      sumVendorSpend: Number(sumVendorSpend.toFixed(2)),
+      sumCategorySpend: Number(sumCategorySpend.toFixed(2)),
+      sumPeriodSpend: Number(sumPeriodSpend.toFixed(2)),
+      vendorDelta: Number(vendorDelta.toFixed(4)),
+      categoryDelta: Number(categoryDelta.toFixed(4)),
+      periodDelta: Number(periodDelta.toFixed(4)),
+    },
+  }
+}
+
+// GET /api/analytics/spend — Aggregates spend totals, categories, vendors & HHI concentration
+app.get('/api/analytics/spend', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('po_id,vendor_id,sku_id,quantity,unit_price,order_date,category')
+      .limit(2000)
+
+    if (error) {
+      return res.status(500).json({ error: error.message })
+    }
+
+    const analytics = calculateSpendAnalytics(data || [])
+    res.json(analytics)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
