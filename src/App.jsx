@@ -34,9 +34,7 @@ function riskStatus(sigmaL) {
 const STATUS_COLOR = { CRITICAL: '#dc2626', WARNING: '#d97706', NORMAL: '#16a34a' }
 const STATUS_BG    = { CRITICAL: '#fee2e2', WARNING: '#fef9c3', NORMAL: '#dcfce7' }
 
-// ── Financial derivation & What-If Simulation Engine (3.2 & 3.6) ─────────────
-// Identity: ROP = µ_d * µ_L + SS  →  µ_d = (ROP − SS) / µ_L
-// SS = Z * sqrt(µ_L * σ_d^2 + µ_d^2 * σ_L^2)
+// ── Financial derivation & What-If Simulation Engine (3.1, 3.2 & 3.6) ────────
 function computeOrderMetrics(order, scenario = null) {
   const price  = Number(order.unit_price)        || 0
   const ssBase = Number(order.safety_stock)      || 0
@@ -52,7 +50,6 @@ function computeOrderMetrics(order, scenario = null) {
   }
 
   const muD = Math.max((ropBase - ssBase) / muLBase, 0)
-  // Recover historical demand sigma σ_d from the 3.1 combined SS formula
   const varTotal = Math.pow(ssBase / 1.65, 2)
   const leadTimeVarPart = Math.pow(muD, 2) * Math.pow(sigmaLBase, 2)
   const demandVarPart = Math.max(0, varTotal - leadTimeVarPart)
@@ -76,7 +73,6 @@ function computeOrderMetrics(order, scenario = null) {
     return { ...baseline, simulated: null }
   }
 
-  // ── 3.6: What-If Perturbations ──
   const zSim = Number(scenario.serviceLevelZ) || 1.65
   const muLSim = Math.max(0.1, muLBase + (Number(scenario.leadTimeDelay) || 0))
   const volMult = Math.max(0.1, Number(scenario.volatilityMultiplier) || 1.0)
@@ -85,7 +81,6 @@ function computeOrderMetrics(order, scenario = null) {
   const muDSim = muD * demMult
   const sigmaDSim = sigmaD * demMult
 
-  // Combined SS under scenario
   const ssSimRaw = zSim * Math.sqrt((muLSim * Math.pow(sigmaDSim, 2)) + (Math.pow(muDSim, 2) * Math.pow(sigmaLSim, 2)))
   const ssSim = Math.round(ssSimRaw)
   const ropSim = Math.round((muDSim * muLSim) + ssSim)
@@ -115,12 +110,92 @@ function computeOrderMetrics(order, scenario = null) {
   }
 }
 
+// ── 3.7: Prescriptive Alternative Supplier Discovery Engine ──────────────────
+function findAlternativeSuppliers(targetOrder, allOrders, maxCount = 3) {
+  if (!targetOrder || !allOrders || allOrders.length === 0) return []
+  const targetVendorId = String(targetOrder.vendor_id)
+  const targetSkuId = String(targetOrder.sku_id)
+  const targetMetrics = computeOrderMetrics(targetOrder)
+  const unitPrice = Number(targetOrder.unit_price) || 0
+
+  const vendorMap = {}
+  for (const o of allOrders) {
+    const vid = String(o.vendor_id)
+    if (!vendorMap[vid]) {
+      vendorMap[vid] = {
+        vendor_id: vid,
+        mu_l: Number(o.predicted_mu_l) || 0,
+        sigma_l: Number(o.predicted_sigma_l) || 0,
+        count: 0,
+        suppliesSku: false,
+      }
+    }
+    vendorMap[vid].count++
+    if (String(o.sku_id) === targetSkuId) {
+      vendorMap[vid].suppliesSku = true
+    }
+  }
+
+  const candidates = []
+  for (const cand of Object.values(vendorMap)) {
+    if (cand.vendor_id === targetVendorId) continue
+    if (cand.sigma_l <= 0 || cand.count < 1) continue
+
+    // Only recommend vendors that reduce volatility
+    if (cand.sigma_l >= targetMetrics.sigmaL && targetMetrics.status !== 'NORMAL') continue
+
+    const z = 1.65
+    const candSSRaw = z * Math.sqrt(
+      (cand.mu_l * Math.pow(targetMetrics.sigmaD, 2)) +
+      (Math.pow(targetMetrics.muD, 2) * Math.pow(cand.sigma_l, 2))
+    )
+    const candSS = Math.round(candSSRaw)
+    const candROP = Math.round((targetMetrics.muD * cand.mu_l) + candSS)
+    const candCapitalLocked = candSS * unitPrice
+    const candCostOfRisk = cand.sigma_l * targetMetrics.muD * unitPrice
+
+    const capitalSavings = Math.max(0, (targetMetrics.capitalLocked ?? 0) - candCapitalLocked)
+    const riskMitigated = Math.max(0, (targetMetrics.costOfRisk ?? 0) - candCostOfRisk)
+    const ssReductionUnits = Math.max(0, targetMetrics.safetyStock - candSS)
+    const ssReductionPct = targetMetrics.safetyStock > 0
+      ? Math.round((ssReductionUnits / targetMetrics.safetyStock) * 100)
+      : 0
+
+    const reliabilityScore = Math.max(5, Math.min(100, Math.round(
+      100 - (cand.sigma_l * 28) - (cand.mu_l * 2) + Math.min(cand.count * 1.5, 20)
+    )))
+
+    candidates.push({
+      vendor_id: cand.vendor_id,
+      mu_l: cand.mu_l,
+      sigma_l: cand.sigma_l,
+      status: riskStatus(cand.sigma_l),
+      suppliesSku: cand.suppliesSku,
+      count: cand.count,
+      reliabilityScore,
+      safetyStock: candSS,
+      reorderPoint: candROP,
+      capitalLocked: candCapitalLocked,
+      costOfRisk: candCostOfRisk,
+      capitalSavings,
+      riskMitigated,
+      ssReductionUnits,
+      ssReductionPct,
+    })
+  }
+
+  candidates.sort((a, b) => (b.reliabilityScore - a.reliabilityScore) || (b.riskMitigated - a.riskMitigated))
+  return candidates.slice(0, maxCount)
+}
+
 // ── Badges & UI Sub-components ───────────────────────────────────────────────
-function RiskBadge({ sigmaL, coldStart, simulatedStatus }) {
+function RiskBadge({ sigmaL, coldStart, simulatedStatus, onMitigate }) {
   const s = simulatedStatus || riskStatus(sigmaL)
   const isEscalated = simulatedStatus && simulatedStatus !== riskStatus(sigmaL)
+  const isHighRisk = s === 'CRITICAL' || s === 'WARNING'
+
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'nowrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
       <span style={{
         backgroundColor: STATUS_BG[s], color: STATUS_COLOR[s],
         padding: '3px 10px', borderRadius: '9999px',
@@ -138,6 +213,19 @@ function RiskBadge({ sigmaL, coldStart, simulatedStatus }) {
         }}>
           cold-start
         </span>
+      )}
+      {isHighRisk && onMitigate && (
+        <button
+          onClick={onMitigate}
+          style={{
+            padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700',
+            backgroundColor: '#fff', color: '#7c3aed', border: '1px solid #c4b5fd',
+            cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
+          }}
+          title="Open Prescriptive Mitigation Center"
+        >
+          ⚡ Mitigate
+        </button>
       )}
     </span>
   )
@@ -371,7 +459,6 @@ function VendorRankingChart({ orders, scenario, onSelect }) {
   )
 }
 
-// ── Histogram helper ─────────────────────────────────────────────────────────
 function buildHistogram(values, bucketSize = 1) {
   if (!values.length) return []
   const min = Math.floor(Math.min(...values))
@@ -385,8 +472,8 @@ function buildHistogram(values, bucketSize = 1) {
   return buckets
 }
 
-// ── Vendor Detail Modal (3.3 & 3.4) ─────────────────────────────────────────
-function VendorModal({ vendorId, onClose, isColdStartVendor }) {
+// ── Vendor Detail Modal (3.3, 3.4 & 3.7 integration) ─────────────────────────
+function VendorModal({ vendorId, onClose, isColdStartVendor, onOpenMitigation }) {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
@@ -424,6 +511,7 @@ function VendorModal({ vendorId, onClose, isColdStartVendor }) {
   const sigmaL    = history[0]?.sigmaL ?? 0
   const status    = riskStatus(sigmaL)
   const histogram = buildHistogram(ltValues, 1)
+  const isHighRisk = status === 'CRITICAL' || status === 'WARNING'
 
   return (
     <div onClick={onClose} style={{
@@ -446,10 +534,24 @@ function VendorModal({ vendorId, onClose, isColdStartVendor }) {
               µ_L = {muL.toFixed(2)} days · σ_L = {sigmaL.toFixed(4)} · {history.length} deliveries
             </p>
           </div>
-          <button onClick={onClose} style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            fontSize: '20px', color: '#94a3b8', lineHeight: 1, padding: '4px',
-          }}>✕</button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {isHighRisk && onOpenMitigation && (
+              <button
+                onClick={() => { onClose(); onOpenMitigation(vendorId); }}
+                style={{
+                  padding: '6px 14px', borderRadius: '6px', fontSize: '12.5px', fontWeight: '700',
+                  backgroundColor: '#7c3aed', color: '#fff', border: 'none', cursor: 'pointer',
+                  boxShadow: '0 2px 6px rgba(124, 58, 237, 0.25)',
+                }}
+              >
+                ⚡ Mitigate Risk & Find Alternates
+              </button>
+            )}
+            <button onClick={onClose} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: '20px', color: '#94a3b8', lineHeight: 1, padding: '4px',
+            }}>✕</button>
+          </div>
         </div>
 
         {/* Cold-start notice banner */}
@@ -549,6 +651,253 @@ function VendorModal({ vendorId, onClose, isColdStartVendor }) {
   )
 }
 
+// ── 3.7: Prescriptive Mitigation Action Center Modal ─────────────────────────
+function MitigationModal({ targetOrder, allOrders, onClose }) {
+  const [selectedStrategy, setSelectedStrategy] = useState('split_sourcing')
+
+  const targetMetrics = useMemo(() => computeOrderMetrics(targetOrder), [targetOrder])
+  const alternatives = useMemo(() => findAlternativeSuppliers(targetOrder, allOrders, 3), [targetOrder, allOrders])
+
+  const topAlt = alternatives[0]
+
+  const handleExportPlan = () => {
+    if (!targetOrder || !topAlt) return
+    const content = [
+      'PRESCRIPTIVE RISK MITIGATION ACTION PLAN',
+      `Generated: ${new Date().toISOString()}`,
+      `PO ID: ${targetOrder.po_id}`,
+      `SKU ID: ${targetOrder.sku_id}`,
+      `Current Incumbent Vendor: ${targetOrder.vendor_id}`,
+      `Current Lead Time Volatility (sigma_L): ${targetMetrics.sigmaL.toFixed(4)} (${targetMetrics.status})`,
+      `Current Working Capital Locked: $${targetMetrics.capitalLocked?.toFixed(2)}`,
+      `Current Cost of Risk Exposure: $${targetMetrics.costOfRisk?.toFixed(2)}`,
+      '',
+      'RECOMMENDED ALTERNATIVE SUPPLIERS',
+      'Rank,Vendor ID,Reliability Score,Predicted sigma_L,Predicted mu_L (days),Recommended SS,Working Capital Savings ($),Delay Risk Mitigated ($)',
+      ...alternatives.map((alt, idx) =>
+        `#${idx + 1},"${alt.vendor_id}",${alt.reliabilityScore}/100,${alt.sigma_l.toFixed(4)},${alt.mu_l.toFixed(2)},${alt.safetyStock},$${alt.capitalSavings.toFixed(2)},$${alt.riskMitigated.toFixed(2)}`
+      ),
+      '',
+      `SELECTED MITIGATION STRATEGY: ${selectedStrategy.toUpperCase()}`,
+      selectedStrategy === 'split_sourcing'
+        ? `Dual-Sourcing 70/30: Allocate 70% volume to Vendor ${topAlt.vendor_id} to recover $${(topAlt.capitalSavings * 0.7).toFixed(2)} in capital; retain 30% with ${targetOrder.vendor_id} to maintain supply resilience.`
+        : selectedStrategy === 'full_switch'
+          ? `Full Reallocation (100%): Transition total volume to Vendor ${topAlt.vendor_id} to capture maximum $${topAlt.capitalSavings.toFixed(2)} working capital recovery.`
+          : `SLA Penalty Enforcement: Enforce contractual delay penalties for lead-time variance against Vendor ${targetOrder.vendor_id} valued at $${targetMetrics.costOfRisk?.toFixed(2)}.`,
+    ].join('\r\n')
+
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.setAttribute('href', url)
+    link.setAttribute('download', `mitigation_plan_PO_${targetOrder.po_id}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.65)',
+      zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        backgroundColor: '#fff', borderRadius: '14px', padding: '32px',
+        width: '100%', maxWidth: '960px', maxHeight: '92vh', overflowY: 'auto',
+        boxShadow: '0 25px 70px rgba(0,0,0,.35)',
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span style={{ backgroundColor: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>
+                PRESCRIPTIVE MITIGATION ACTION CENTER
+              </span>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>Roadmap Section 3.7</span>
+            </div>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: '#0f172a' }}>
+              Supplier Risk Mitigation · PO #{targetOrder.po_id}
+            </h2>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>
+              Incumbent Vendor: <strong>{targetOrder.vendor_id}</strong> &nbsp;·&nbsp; SKU: <strong>{targetOrder.sku_id}</strong> &nbsp;·&nbsp; Unit Price: <strong>${Number(targetOrder.unit_price).toFixed(2)}</strong>
+            </p>
+          </div>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: '22px', color: '#94a3b8', lineHeight: 1, padding: '4px',
+          }}>✕</button>
+        </div>
+
+        {/* Current Vendor Diagnosis */}
+        <div style={{
+          backgroundColor: '#fff5f5', border: '1px solid #fecaca', borderLeft: '5px solid #dc2626',
+          borderRadius: '8px', padding: '16px 20px', marginBottom: '24px',
+        }}>
+          <div style={{ fontSize: '13px', fontWeight: '700', color: '#991b1b', marginBottom: '6px' }}>
+            ⚠ Current Risk Diagnosis
+          </div>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '13px', color: '#334155' }}>
+            <div>Volatility σ_L: <strong>{targetMetrics.sigmaL.toFixed(4)}</strong> ({targetMetrics.status})</div>
+            <div>Mean Lead Time µ_L: <strong>{targetMetrics.muL.toFixed(2)} days</strong></div>
+            <div>Safety Stock: <strong>{targetMetrics.safetyStock} units</strong></div>
+            <div>Capital Locked: <strong>{formatMoney(targetMetrics.capitalLocked)}</strong></div>
+            <div>Delay Cost of Risk: <strong style={{ color: '#dc2626' }}>{formatMoney(targetMetrics.costOfRisk)}</strong></div>
+          </div>
+        </div>
+
+        {/* Alternative Suppliers */}
+        <div style={{ marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: '700', color: '#1e293b' }}>
+            ★ Top Qualified Alternative Suppliers
+          </h3>
+          <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748b' }}>
+            Vetted suppliers ranked by composite reliability score with calculated working capital and delay risk recovery.
+          </p>
+
+          {alternatives.length === 0 ? (
+            <div style={{ padding: '20px', backgroundColor: '#f8fafc', borderRadius: '8px', color: '#64748b', fontSize: '13px' }}>
+              No alternative suppliers with lower lead-time variance were found in the current active fleet.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px' }}>
+              {alternatives.map((alt, idx) => (
+                <div key={alt.vendor_id} style={{
+                  backgroundColor: '#fff', border: idx === 0 ? '2px solid #7c3aed' : '1px solid #e2e8f0',
+                  borderRadius: '10px', padding: '16px', position: 'relative',
+                  boxShadow: idx === 0 ? '0 4px 12px rgba(124, 58, 237, 0.12)' : 'none',
+                }}>
+                  {idx === 0 && (
+                    <span style={{
+                      position: 'absolute', top: '-10px', right: '14px',
+                      backgroundColor: '#7c3aed', color: '#fff',
+                      fontSize: '10.5px', fontWeight: '700', padding: '2px 8px', borderRadius: '9999px',
+                    }}>
+                      ★ BEST VALUE ALTERNATIVE
+                    </span>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontWeight: '700', fontSize: '16px', color: '#0f172a' }}>
+                      Vendor {alt.vendor_id}
+                    </div>
+                    <span style={{
+                      backgroundColor: '#dcfce7', color: '#166534',
+                      padding: '2px 8px', borderRadius: '9999px', fontSize: '11px', fontWeight: '700',
+                    }}>
+                      Score: {alt.reliabilityScore}/100
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '12.5px', color: '#475569', lineHeight: '1.6', marginBottom: '12px' }}>
+                    <div>Volatility σ_L: <strong>{alt.sigma_l.toFixed(4)}</strong> ({alt.status})</div>
+                    <div>Mean Lead Time µ_L: <strong>{alt.mu_l.toFixed(2)} days</strong></div>
+                    <div>Recommended Safety Stock: <strong>{alt.safetyStock} units</strong> ({alt.ssReductionPct > 0 ? `-${alt.ssReductionPct}%` : '0%'})</div>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                    <div>
+                      <div style={{ color: '#64748b', fontSize: '11px' }}>Capital Unlocked</div>
+                      <div style={{ fontWeight: '800', color: '#16a34a', fontSize: '14px' }}>+{formatMoney(alt.capitalSavings)}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ color: '#64748b', fontSize: '11px' }}>Risk Mitigated</div>
+                      <div style={{ fontWeight: '800', color: '#7c3aed', fontSize: '14px' }}>+{formatMoney(alt.riskMitigated)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Prescriptive Strategic Action Selector */}
+        {topAlt && (
+          <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px', marginBottom: '24px' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '14.5px', fontWeight: '700', color: '#1e293b' }}>
+              Strategic Reallocation Policies
+            </h3>
+            <p style={{ margin: '0 0 14px', fontSize: '12.5px', color: '#64748b' }}>
+              Choose a procurement policy to apply to upcoming purchase requisitions.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {[
+                {
+                  id: 'split_sourcing',
+                  title: `Dual-Sourcing Split (70% Vendor ${topAlt.vendor_id} / 30% Incumbent)`,
+                  description: `Industry gold standard: Captures $${formatMoney(topAlt.capitalSavings * 0.7)} working capital while maintaining dual-supplier resilience to protect against single-point failure.`,
+                  badge: 'Recommended Policy',
+                },
+                {
+                  id: 'full_switch',
+                  title: `Full Supplier Switch (100% Transition to Vendor ${topAlt.vendor_id})`,
+                  description: `Aggressive optimization: Transitions complete volume to unlock full $${formatMoney(topAlt.capitalSavings)} in safety stock capital.`,
+                  badge: 'Max Capital Recovery',
+                },
+                {
+                  id: 'contract_sla_penalty',
+                  title: `Contract SLA Enforcement against Vendor ${targetOrder.vendor_id}`,
+                  description: `Commercial leverage: Present documented lead-time volatility metrics during quarterly review to enforce lead-time penalty clauses valued at ${formatMoney(targetMetrics.costOfRisk)}.`,
+                  badge: 'Commercial Leverage',
+                },
+              ].map(strat => (
+                <label key={strat.id} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '12px',
+                  backgroundColor: selectedStrategy === strat.id ? '#eff6ff' : '#fff',
+                  border: selectedStrategy === strat.id ? '1.5px solid #3b82f6' : '1px solid #cbd5e1',
+                  borderRadius: '8px', padding: '12px 14px', cursor: 'pointer',
+                }}>
+                  <input
+                    type="radio" name="mitigation_strategy"
+                    checked={selectedStrategy === strat.id}
+                    onChange={() => setSelectedStrategy(strat.id)}
+                    style={{ marginTop: '3px', accentColor: '#3b82f6' }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: '700', fontSize: '13px', color: '#1e293b' }}>{strat.title}</span>
+                      <span style={{ backgroundColor: '#e2e8f0', color: '#475569', fontSize: '10.5px', fontWeight: '600', padding: '1px 6px', borderRadius: '4px' }}>
+                        {strat.badge}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                      {strat.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Footer Actions */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <button
+            onClick={handleExportPlan}
+            disabled={!topAlt}
+            style={{
+              padding: '9px 18px', borderRadius: '7px', fontSize: '13px', fontWeight: '700',
+              backgroundColor: '#0f766e', color: '#fff', border: 'none', cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+            }}
+          >
+            📥 Export Mitigation Action Plan (CSV)
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '9px 18px', borderRadius: '7px', fontSize: '13px', fontWeight: '600',
+              backgroundColor: '#fff', color: '#475569', border: '1px solid #cbd5e1', cursor: 'pointer',
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── 3.6: What-If Scenario Stress-Testing Drawer / Panel ───────────────────────
 function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
   const serviceLevelOptions = [
@@ -587,7 +936,6 @@ function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
-        {/* Control 1: Service Level Policy */}
         <div>
           <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#334155', marginBottom: '6px' }}>
             Target Service Level (Z-score)
@@ -611,7 +959,6 @@ function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
           </div>
         </div>
 
-        {/* Control 2: Lead Time Delay (Days) */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
             <label style={{ fontSize: '12px', fontWeight: '600', color: '#334155' }}>
@@ -633,7 +980,6 @@ function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
           </div>
         </div>
 
-        {/* Control 3: Lead Time Volatility (Multiplier) */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
             <label style={{ fontSize: '12px', fontWeight: '600', color: '#334155' }}>
@@ -655,7 +1001,6 @@ function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
           </div>
         </div>
 
-        {/* Control 4: Demand Surge (Multiplier) */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
             <label style={{ fontSize: '12px', fontWeight: '600', color: '#334155' }}>
@@ -681,7 +1026,6 @@ function ScenarioSimulatorPanel({ scenario, onChange, onReset }) {
   )
 }
 
-// ── 3.6: CSV Export Helper ───────────────────────────────────────────────────
 function exportOrdersToCSV(orders, scenario) {
   const isSim = scenario && scenario.enabled
   const headers = [
@@ -758,6 +1102,9 @@ export default function App() {
   const [search,         setSearch]         = useState('')
   const [selectedVendor, setSelectedVendor] = useState(null)
 
+  // ── 3.7: Prescriptive Mitigation state ──
+  const [selectedMitigationOrder, setSelectedMitigationOrder] = useState(null)
+
   // ── 3.6: Scenario state ──
   const [scenario, setScenario] = useState({
     enabled: false,
@@ -793,8 +1140,18 @@ export default function App() {
   const openVendor  = useCallback(vid => setSelectedVendor(vid), [])
   const closeVendor = useCallback(() => setSelectedVendor(null), [])
 
+  const handleMitigateFromVendor = useCallback(vid => {
+    const matching = orders.find(o => String(o.vendor_id) === String(vid))
+    if (matching) setSelectedMitigationOrder(matching)
+  }, [orders])
+
   useEffect(() => {
-    const handler = e => { if (e.key === 'Escape') closeVendor() }
+    const handler = e => {
+      if (e.key === 'Escape') {
+        closeVendor()
+        setSelectedMitigationOrder(null)
+      }
+    }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [closeVendor])
@@ -803,7 +1160,6 @@ export default function App() {
     ? orders.some(o => String(o.vendor_id) === selectedVendor && isColdStart(o))
     : false
 
-  // Client-side filter + search (evaluates either base or simulated status)
   const visible = useMemo(() => {
     return orders.filter(o => {
       const m = computeOrderMetrics(o, scenario)
@@ -843,12 +1199,12 @@ export default function App() {
             Supply Chain Risk Dashboard
           </h1>
           <p style={{ margin: 0, color: '#64748b', fontSize: '14px' }}>
-            Order-level lead-time variance · risk-adjusted safety stock · financial cost of delay
+            Order-level lead-time variance · risk-adjusted safety stock · financial cost of delay · prescriptive mitigation
           </p>
         </div>
 
-        {/* 3.6 What-If Simulator Toggle & CSV Export */}
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        {/* 3.6 & 3.7 Top Actions */}
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             onClick={() => setScenario(prev => ({ ...prev, enabled: !prev.enabled }))}
             style={{
@@ -889,7 +1245,7 @@ export default function App() {
         </div>
       ) : (
         <>
-          {/* 3.6: What-If Scenario Stress-Testing Drawer */}
+          {/* What-If Scenario Stress-Testing Drawer */}
           {scenario.enabled && (
             <ScenarioSimulatorPanel
               scenario={scenario}
@@ -901,10 +1257,10 @@ export default function App() {
           {/* KPI Summary Cards */}
           <SummaryBar orders={orders} scenario={scenario} />
 
-          {/* 3.3 & 3.6: Vendor Ranking Chart */}
+          {/* Vendor Ranking Chart */}
           <VendorRankingChart orders={orders} scenario={scenario} onSelect={openVendor} />
 
-          {/* Toolbar — includes COLD filter tab (3.4) */}
+          {/* Toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
             {['ALL', 'CRITICAL', 'WARNING', 'NORMAL', 'COLD'].map(f => (
               <button key={f} onClick={() => setFilter(f)} style={{
@@ -943,7 +1299,7 @@ export default function App() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13.5px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  {['PO ID', 'Vendor ID', 'SKU ID', 'Actual LT', 'Pred. µ_L', 'Pred. σ_L', 'Safety Stock', 'Reorder Point', 'Financial Impact', 'Risk'].map(h => (
+                  {['PO ID', 'Vendor ID', 'SKU ID', 'Actual LT', 'Pred. µ_L', 'Pred. σ_L', 'Safety Stock', 'Reorder Point', 'Financial Impact', 'Risk & Mitigation'].map(h => (
                     <th key={h} style={{ padding: '11px 14px', textAlign: 'left', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -965,7 +1321,6 @@ export default function App() {
                     <tr key={order.po_id} style={{ backgroundColor: rowBg, borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '11px 14px', fontWeight: '500', fontFamily: 'monospace' }}>{order.po_id}</td>
 
-                      {/* Vendor ID — clickable */}
                       <td style={{ padding: '11px 14px' }}>
                         <button
                           onClick={() => openVendor(String(order.vendor_id))}
@@ -1030,7 +1385,6 @@ export default function App() {
                         )}
                       </td>
 
-                      {/* Financial Impact */}
                       <td style={{ padding: '11px 14px' }}>
                         {m.stale ? (
                           <span style={{ color: '#94a3b8', fontSize: '12px' }}>needs recompute</span>
@@ -1058,11 +1412,13 @@ export default function App() {
                         )}
                       </td>
 
+                      {/* 3.7: Risk Badge with One-Click Mitigation Action */}
                       <td style={{ padding: '11px 14px' }}>
                         <RiskBadge
                           sigmaL={isSim ? m.simulated.sigmaL : m.sigmaL}
                           coldStart={cold}
                           simulatedStatus={isSim ? m.simulated.status : null}
+                          onMitigate={() => setSelectedMitigationOrder(order)}
                         />
                       </td>
                     </tr>
@@ -1078,11 +1434,10 @@ export default function App() {
             )}
           </div>
 
-          {/* Footer */}
           <p style={{ marginTop: '16px', fontSize: '12px', color: '#94a3b8' }}>
             Financial impact: <em>Cost of risk = σ_L × µ_d × unit_price</em> · <em>Capital locked = SS × unit_price</em> · µ_d = (ROP − SS) / µ_L.
             &nbsp;Click any <strong>Vendor ID</strong> to view delivery charts.
-            &nbsp;<strong>What-If Simulator</strong> allows interactive stress testing with real-time recalculation.
+            &nbsp;Click <strong>⚡ Mitigate</strong> on high-risk orders to discover alternative suppliers and prescriptive dual-sourcing strategies.
           </p>
         </>
       )}
@@ -1093,6 +1448,16 @@ export default function App() {
           vendorId={selectedVendor}
           onClose={closeVendor}
           isColdStartVendor={selectedVendorIsColdStart}
+          onOpenMitigation={handleMitigateFromVendor}
+        />
+      )}
+
+      {/* 3.7: Prescriptive Mitigation Action Center Modal */}
+      {selectedMitigationOrder && (
+        <MitigationModal
+          targetOrder={selectedMitigationOrder}
+          allOrders={orders}
+          onClose={() => setSelectedMitigationOrder(null)}
         />
       )}
     </div>

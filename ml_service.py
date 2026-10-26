@@ -56,6 +56,13 @@ class ScenarioRequest(BaseModel):
     demand_multiplier: float | None = 1.0
 
 
+class RecommendationRequest(BaseModel):
+    po_id: str | None = None
+    vendor_id: str | None = None
+    sku_id: str | None = None
+    max_recommendations: int | None = 3
+
+
 # ── Module-level cache for the global fleet statistics ───────────────────────
 # Populated on the first call to _global_lead_time_stats() and kept for the
 # lifetime of the process.  Call /api/reset_global_cache to invalidate.
@@ -421,6 +428,181 @@ def simulate_scenario(payload: ScenarioRequest):
             "cost_of_risk_diff": round(sim_money["cost_of_risk"] - base_money["cost_of_risk"], 2),
             "risk_status_escalated": base_status != sim_status,
         },
+    }
+
+
+@app.post("/api/recommend_alternatives")
+def recommend_alternatives(payload: RecommendationRequest):
+    """
+    3.7: Prescriptive Risk Mitigation & Alternative Supplier Recommendation.
+
+    Given a PO ID (or vendor_id + sku_id), discovers vetted, lower-risk alternative
+    suppliers, ranks them by composite reliability score, and computes prescriptive savings:
+    - Safety stock reduction (units & %)
+    - Working capital unlocked ($)
+    - Financial cost of risk mitigated ($)
+    - Actionable dual-sourcing split policy recommendation
+    """
+    po_id = payload.po_id
+    vendor_id = payload.vendor_id
+    sku_id = payload.sku_id
+    unit_price = 0.0
+
+    if po_id:
+        order_rows = (
+            supabase.table("orders")
+            .select("po_id,vendor_id,sku_id,unit_price")
+            .eq("po_id", po_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not order_rows:
+            raise HTTPException(status_code=404, detail=f"Order {po_id} not found")
+        order = order_rows[0]
+        vendor_id = order["vendor_id"]
+        sku_id = order["sku_id"]
+        unit_price = float(order.get("unit_price") or 0.0)
+
+    if not vendor_id:
+        raise HTTPException(status_code=400, detail="Must provide po_id or vendor_id")
+
+    # Current vendor performance
+    curr_mu_l, curr_sigma_l, curr_n = vendor_lead_time_stats(vendor_id)
+    curr_status = _risk_status(curr_sigma_l)
+
+    # SKU demand stats
+    if sku_id:
+        mu_d, sigma_d, _ = sku_daily_demand(sku_id)
+    else:
+        mu_d, sigma_d = LEGACY_DAILY_DEMAND, 0.0
+
+    curr_ss = safety_stock(mu_d, sigma_d, curr_mu_l, curr_sigma_l)
+    curr_ss_units = int(round(curr_ss))
+    curr_rop = int(round((mu_d * curr_mu_l) + curr_ss))
+    curr_money = cost_of_risk_metrics(curr_ss_units, mu_d, curr_sigma_l, unit_price)
+
+    # Discover alternative candidate vendors
+    candidate_vendor_ids = set()
+    if sku_id:
+        same_sku_rows = (
+            supabase.table("orders")
+            .select("vendor_id")
+            .eq("sku_id", sku_id)
+            .limit(100)
+            .execute()
+            .data
+            or []
+        )
+        for r in same_sku_rows:
+            vid = r.get("vendor_id")
+            if vid and str(vid) != str(vendor_id):
+                candidate_vendor_ids.add(str(vid))
+
+    if len(candidate_vendor_ids) < 3:
+        fleet_rows = (
+            supabase.table("orders")
+            .select("vendor_id")
+            .limit(300)
+            .execute()
+            .data
+            or []
+        )
+        for r in fleet_rows:
+            vid = r.get("vendor_id")
+            if vid and str(vid) != str(vendor_id):
+                candidate_vendor_ids.add(str(vid))
+
+    candidates = []
+    for cand_id in candidate_vendor_ids:
+        try:
+            cand_mu_l, cand_sigma_l, cand_n = vendor_lead_time_stats(cand_id)
+            if cand_n == 0:
+                continue
+
+            cand_status = _risk_status(cand_sigma_l)
+            if cand_sigma_l >= curr_sigma_l and curr_status != "NORMAL":
+                continue
+
+            cand_ss = safety_stock(mu_d, sigma_d, cand_mu_l, cand_sigma_l)
+            cand_ss_units = int(round(cand_ss))
+            cand_rop = int(round((mu_d * cand_mu_l) + cand_ss))
+            cand_money = cost_of_risk_metrics(cand_ss_units, mu_d, cand_sigma_l, unit_price)
+
+            capital_savings = max(0.0, round(curr_money["capital_locked"] - cand_money["capital_locked"], 2))
+            risk_mitigated = max(0.0, round(curr_money["cost_of_risk"] - cand_money["cost_of_risk"], 2))
+            ss_reduction_units = max(0, curr_ss_units - cand_ss_units)
+            ss_reduction_pct = round((ss_reduction_units / max(curr_ss_units, 1)) * 100, 1)
+
+            reliability_score = max(5.0, min(100.0, round(
+                100.0 - (cand_sigma_l * 28.0) - (cand_mu_l * 2.0) + min(cand_n * 1.5, 20.0), 1
+            )))
+
+            candidates.append({
+                "vendor_id": cand_id,
+                "reliability_score": reliability_score,
+                "risk_status": cand_status,
+                "predicted_mu_l": round(cand_mu_l, 2),
+                "predicted_sigma_l": round(cand_sigma_l, 4),
+                "vendor_history_n": cand_n,
+                "recommended_safety_stock": cand_ss_units,
+                "recommended_reorder_point": cand_rop,
+                "capital_locked": cand_money["capital_locked"],
+                "cost_of_risk": cand_money["cost_of_risk"],
+                "working_capital_savings": capital_savings,
+                "cost_of_risk_mitigated": risk_mitigated,
+                "safety_stock_reduction_units": ss_reduction_units,
+                "safety_stock_reduction_pct": ss_reduction_pct,
+                "split_sourcing_recommendation": {
+                    "primary_allocation_pct": 70,
+                    "secondary_allocation_pct": 30,
+                    "strategy_note": f"Allocate 70% volume to {cand_id} to capture ${capital_savings} buffer savings; retain 30% with {vendor_id} as secondary supplier to maintain dual-source resilience."
+                }
+            })
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda x: (x["reliability_score"], x["cost_of_risk_mitigated"]), reverse=True)
+    top_limit = payload.max_recommendations or 3
+    recommendations = candidates[:top_limit]
+
+    return {
+        "po_id": po_id,
+        "sku_id": sku_id,
+        "unit_price": unit_price,
+        "current_vendor": {
+            "vendor_id": vendor_id,
+            "risk_status": curr_status,
+            "predicted_mu_l": round(curr_mu_l, 2),
+            "predicted_sigma_l": round(curr_sigma_l, 4),
+            "vendor_history_n": curr_n,
+            "safety_stock": curr_ss_units,
+            "reorder_point": curr_rop,
+            **curr_money,
+        },
+        "recommendation_count": len(recommendations),
+        "recommendations": recommendations,
+        "action_strategies": [
+            {
+                "id": "full_switch",
+                "title": "Full Supplier Reallocation (100% Transition)",
+                "description": "Switch 100% of upcoming PO allocations to the top-ranked alternative supplier to maximize working capital recovery.",
+                "potential_savings": recommendations[0]["working_capital_savings"] if recommendations else 0.0,
+            },
+            {
+                "id": "split_sourcing",
+                "title": "Dual-Sourcing Split (70/30 Policy)",
+                "description": "Split volume 70% to recommended alternative and 30% to incumbent supplier to maintain supplier relationship while reducing portfolio variance.",
+                "potential_savings": round((recommendations[0]["working_capital_savings"] if recommendations else 0.0) * 0.7, 2),
+            },
+            {
+                "id": "contract_sla_penalty",
+                "title": "SLA Lead-Time Penalty Enforcement",
+                "description": f"Present lead-time volatility metrics (sigma_L={round(curr_sigma_l, 3)}) during contract renewal and demand compensatory buffer holding fees.",
+                "potential_savings": curr_money["cost_of_risk"],
+            }
+        ]
     }
 
 
