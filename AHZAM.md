@@ -359,7 +359,7 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 - **4.1: Cloud Architecture & Node.js API Gateway** (Status: complete)
 - **4.2: Data Ingestion, Row-Level Validation & Error Quarantine** (Status: complete)
 - **4.3: Core Spend Analytics & Vendor Concentration Dashboard** (Status: complete)
-- **4.4: Vendor Historical Scorecards & On-Time Performance Scoring** (Status: upcoming)
+- **4.4: Vendor Historical Scorecards & On-Time Performance Scoring** (Status: complete)
 
 ---
 
@@ -559,6 +559,80 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 
 ---
 
+## 4.4 Vendor Historical Scorecards & On-Time Performance Scoring
+
+**Status:** complete
+
+### What was done
+
+1. **Vendor Historical Performance & Scorecard Engine (`server/index.js` & `src/VendorScorecardsView.jsx`)**
+   - Implemented `buildVendorScorecards(orders)` generating historical track record analytics for every supplier in the fleet:
+     - **On-Time Delivery Rate (%)**: Evaluates actual shipment lead time against the contract baseline schedule $\mu_L$ ($actual \le \mu_L$ counted as on-time).
+     - **Average Delay on Late Orders**: Computes average slippage days ($actual - \mu_L$) specifically across delayed deliveries.
+     - **Maximum Historical Delay**: Tracks peak delivery delay experienced from the vendor.
+     - **Lead-Time Distribution Metrics**: Average delivery span $\mu_L$ and delivery volatility $\sigma_L$.
+     - **Letter Grades & Reliability Tiers**:
+       - **Grade A (Preferred)**: On-Time $\ge 90\%$, $\sigma_L < 1.65$ (Green).
+       - **Grade B (Approved)**: On-Time $80\% - 89\%$, $\sigma_L \le 1.85$ (Blue).
+       - **Grade C (Conditional)**: On-Time $70\% - 79\%$ (Amber).
+       - **Grade F (High-Risk)**: On-Time $< 70\%$ or $\sigma_L > 1.85$ (Red).
+       - **Cold-Start**: New suppliers with zero historical delivery records (Purple).
+     - **Procurement Financials**: Total dollar spend managed and total units ordered per supplier.
+   - Built backend API endpoint `GET /api/analytics/vendor-scorecards` in `server/index.js`.
+
+2. **Attached Plain-Language Explanations & Delay Risk Diagnostics (`src/OrderRiskExplanationModal.jsx`)**
+   - Implemented `generateExplanation(order)` providing natural-language interpretations of ML model scores for every individual purchase order:
+     - Interprets $\sigma_L$, $\mu_L$, safety stock units ($SS$), and dollar capital exposure ($SS \times unit\_price$).
+     - Calculates estimated **Delay Probability ($P(\text{Delay})$)** (e.g. `82–94%` for Critical, `<15%` for Normal).
+     - Generates structured narratives detailing:
+       - Operational diagnosis of lead-time distribution tails.
+       - Impact on stockout risk and required inventory buffer.
+       - Clear, actionable procurement policy recommendations (e.g., dual-sourcing splits, SLA delivery tracking).
+   - Added interactive **`💡 Explain`** pill button on every order row in the Orders Table opening the explanation modal.
+
+3. **Vendor Scorecard UI & Fleet Performance Center (`src/VendorScorecardsView.jsx`)**
+   - Added **`⭐ Vendor Historical Scorecards`** tab to the top navigation bar.
+   - Fleet Performance Summary Cards:
+     - **Fleet Avg On-Time Rate (%)**: Fleet-wide delivery reliability gauge.
+     - **Avg Delay on Late Orders**: Quantitative delay impact across suppliers.
+     - **Preferred Suppliers Count (Grade A)** vs **High-Risk Suppliers (Grade F)**.
+   - Filter & Sort Controls:
+     - Filter by Reliability Tier (`All`, `Preferred`, `Approved`, `Conditional`, `High-Risk`, `Cold-Start`).
+     - Sort by Total Spend, On-Time Rate (best/worst), Average Delay, or Volatility $\sigma_L$.
+     - Search by Vendor ID.
+   - Rich Scorecard Cards Grid:
+     - Distinct letter grade badge, on-time percentage progress bar, average delay callout, and attached performance diagnosis.
+     - **`🔍 Inspect Delivery History`** button: seamlessly opens the Recharts lead-time timeline & histogram modal for that supplier.
+     - **`⚡ Mitigate Risk`** button: triggers Prescriptive Mitigation drawer directly for high-risk vendors.
+   - **`📥 Export Vendor Scorecards (CSV)`** button: downloads complete vendor scorecard dataset.
+
+### Why it was done this way
+
+- **Bridging Statistical ML with Executive Clarity.** While data scientists understand standard deviations ($\sigma_L = 2.45$), procurement executives and inventory planners need plain-language explanations answering *"Why is this order at risk?"* and *"What is the probability of delay?"*. Generating attached natural-language narratives bridges this gap.
+- **Contractual SLA Enforcement.** In enterprise supply chain management, purchasing contracts include Service Level Agreements (SLAs). Having an objective on-time delivery percentage and average delay metrics provides empirical evidence during quarterly business reviews (QBRs) to demand vendor remediation or discounts.
+- **Holistic 3-Tier Integration.** The scorecard view directly interfaces with the delivery history charts (Feature 3.3) and the prescriptive mitigation solver (Feature 3.7), creating a cohesive end-to-end procurement workflow.
+
+### How to verify
+
+1. **Inspect Vendor Scorecards View:**
+   - Open dashboard at `http://localhost:5173`.
+   - Click the **`⭐ Vendor Historical Scorecards`** tab in the top navigation bar.
+   - Verify fleet KPI cards display Fleet Avg On-Time Rate and Late Order Delay impact.
+   - Review vendor scorecard cards; confirm on-time progress bars, delay stats, letter grade badges, and attached performance assessments are visible.
+2. **Filter & Sort Scorecards:**
+   - Select **Preferred (Grade A)** or **High-Risk (Grade F)** from the Reliability Tier dropdown.
+   - Search for a specific vendor ID (e.g. `104` or `52`).
+   - Click **`🔍 Inspect Delivery History`** on any card to confirm the delivery timeline modal opens with Recharts graphs.
+3. **Inspect Order Delay Risk Explanations in Orders Table:**
+   - Switch back to the **`🛡️ Supply Chain Risk & Mitigation`** tab.
+   - In the Orders Table, locate any order and click the **`💡 Explain`** button next to the risk badge.
+   - Confirm the Machine Learning Delay Risk Explanation modal opens, displaying estimated delay probability (%), plain-language narrative, and recommended procurement policies.
+4. **Export Scorecards:**
+   - In the Vendor Scorecards tab, click **`📥 Export Vendor Scorecards (CSV)`**.
+   - Open the downloaded CSV to confirm vendor grades, on-time percentages, delay metrics, and assessment summaries are exported cleanly.
+
+---
+
 ## Roadmap completion summary
 
 | Section | Feature | Key Artifacts | Status |
@@ -573,4 +647,4 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 | **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), `App.jsx` Gateway route | Complete |
 | **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, `App.jsx`, quarantine error CSV | Complete |
 | **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, `App.jsx`, HHI & reconciliation CSV | Complete |
-| **4.4** | Vendor Historical Scorecards & On-Time Scoring | On-time delivery rate %, average delay days vs promised, scorecard view | Upcoming |
+| **4.4** | Vendor Historical Scorecards & On-Time Scoring | `server/index.js`, `src/VendorScorecardsView.jsx`, `src/OrderRiskExplanationModal.jsx`, `App.jsx` | Complete |

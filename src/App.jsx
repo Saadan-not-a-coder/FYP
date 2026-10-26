@@ -6,6 +6,8 @@ import {
 } from 'recharts'
 import DataIngestionModal from './DataIngestionModal.jsx'
 import SpendAnalyticsView from './SpendAnalyticsView.jsx'
+import VendorScorecardsView from './VendorScorecardsView.jsx'
+import OrderRiskExplanationModal from './OrderRiskExplanationModal.jsx'
 
 // ── Supabase & Node.js API Gateway connections ──────────────────────────────
 const nodeApiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -192,7 +194,7 @@ function findAlternativeSuppliers(targetOrder, allOrders, maxCount = 3) {
 }
 
 // ── Badges & UI Sub-components ───────────────────────────────────────────────
-function RiskBadge({ sigmaL, coldStart, simulatedStatus, onMitigate }) {
+function RiskBadge({ sigmaL, coldStart, simulatedStatus, onMitigate, onExplain }) {
   const s = simulatedStatus || riskStatus(sigmaL)
   const isEscalated = simulatedStatus && simulatedStatus !== riskStatus(sigmaL)
   const isHighRisk = s === 'CRITICAL' || s === 'WARNING'
@@ -216,6 +218,19 @@ function RiskBadge({ sigmaL, coldStart, simulatedStatus, onMitigate }) {
         }}>
           cold-start
         </span>
+      )}
+      {onExplain && (
+        <button
+          onClick={onExplain}
+          style={{
+            padding: '2px 7px', borderRadius: '4px', fontSize: '11px', fontWeight: '600',
+            backgroundColor: '#fff', color: '#0284c7', border: '1px solid #bae6fd',
+            cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
+          }}
+          title="Inspect ML delay risk assessment narrative"
+        >
+          💡 Explain
+        </button>
       )}
       {isHighRisk && onMitigate && (
         <button
@@ -1111,8 +1126,10 @@ export default function App() {
   const [gatewayConnected, setGatewayConnected] = useState(false)
   // ── 4.2: Data Ingestion Modal state ──
   const [ingestModalOpen, setIngestModalOpen] = useState(false)
-  // ── 4.3: Navigation Tab state ('risk' | 'spend') ──
+  // ── 4.3 & 4.4: Navigation Tab state ('risk' | 'spend' | 'scorecards') ──
   const [activeNavTab, setActiveNavTab] = useState('risk')
+  // ── 4.4: Plain-Language Order Delay Risk state ──
+  const [explainingOrder, setExplainingOrder] = useState(null)
 
   // ── 3.6: Scenario state ──
   const [scenario, setScenario] = useState({
@@ -1297,7 +1314,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 4.3 Navigation Tabs: Operational Risk vs Core Spend Analytics */}
+      {/* 4.3 & 4.4 Navigation Tabs: Operational Risk vs Spend vs Vendor Scorecards */}
       <div style={{
         display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0',
       }}>
@@ -1325,7 +1342,20 @@ export default function App() {
             marginBottom: '-2px',
           }}
         >
-          📊 Core Spend Analytics & Vendor Concentration
+          📊 Core Spend Analytics & Concentration
+        </button>
+        <button
+          onClick={() => setActiveNavTab('scorecards')}
+          style={{
+            padding: '10px 20px', border: 'none', background: 'none', fontSize: '14px', fontWeight: '700',
+            cursor: 'pointer',
+            borderBottom: activeNavTab === 'scorecards' ? '3px solid #7c3aed' : '3px solid transparent',
+            color: activeNavTab === 'scorecards' ? '#7c3aed' : '#64748b',
+            display: 'inline-flex', alignItems: 'center', gap: '8px',
+            marginBottom: '-2px',
+          }}
+        >
+          ⭐ Vendor Historical Scorecards
         </button>
       </div>
 
@@ -1338,6 +1368,12 @@ export default function App() {
         </div>
       ) : activeNavTab === 'spend' ? (
         <SpendAnalyticsView orders={orders} />
+      ) : activeNavTab === 'scorecards' ? (
+        <VendorScorecardsView
+          orders={orders}
+          onSelectVendor={openVendor}
+          onOpenMitigation={handleMitigateFromVendor}
+        />
       ) : (
         <>
           {/* What-If Scenario Stress-Testing Drawer */}
@@ -1507,13 +1543,14 @@ export default function App() {
                         )}
                       </td>
 
-                      {/* 3.7: Risk Badge with One-Click Mitigation Action */}
+                      {/* 3.7 & 4.4: Risk Badge with Mitigation & Plain-Language Explanation */}
                       <td style={{ padding: '11px 14px' }}>
                         <RiskBadge
                           sigmaL={isSim ? m.simulated.sigmaL : m.sigmaL}
                           coldStart={cold}
                           simulatedStatus={isSim ? m.simulated.status : null}
                           onMitigate={() => setSelectedMitigationOrder(order)}
+                          onExplain={() => setExplainingOrder(order)}
                         />
                       </td>
                     </tr>
@@ -1564,6 +1601,15 @@ export default function App() {
         nodeApiUrl={nodeApiUrl}
         supabase={supabase}
       />
+
+      {/* 4.4: Plain-Language Order Delay Risk Explanation Modal */}
+      {explainingOrder && (
+        <OrderRiskExplanationModal
+          order={explainingOrder}
+          onClose={() => setExplainingOrder(null)}
+          onOpenMitigation={order => setSelectedMitigationOrder(order)}
+        />
+      )}
     </div>
   )
 }

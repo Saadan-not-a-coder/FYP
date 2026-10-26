@@ -479,6 +479,163 @@ app.get('/api/analytics/spend', async (req, res) => {
   }
 })
 
+// ── 5. Vendor Historical Scorecards & On-Time Performance (Sprint 4.4) ───────
+
+export function buildVendorScorecards(orders) {
+  const vendorMap = {}
+
+  orders.forEach(o => {
+    const vid = o.vendor_id ? String(o.vendor_id).trim() : 'UNKNOWN'
+    const actualLt = o.actual_lead_time != null ? Number(o.actual_lead_time) : null
+    const muL = o.predicted_mu_l != null ? Number(o.predicted_mu_l) : 7.0
+    const sigmaL = o.predicted_sigma_l != null ? Number(o.predicted_sigma_l) : 2.0
+    const qty = Number(o.quantity) > 0 ? Number(o.quantity) : 1
+    const price = Number(o.unit_price) >= 0 ? Number(o.unit_price) : 0
+    const spend = qty * price
+    const isCold = typeof o.risk_status === 'string' && o.risk_status.startsWith('COLD_')
+
+    if (!vendorMap[vid]) {
+      vendorMap[vid] = {
+        vendor_id: vid,
+        total_orders: 0,
+        completed_orders: 0,
+        on_time_orders: 0,
+        delayed_orders: 0,
+        total_delay_days: 0,
+        max_delay_days: 0,
+        lead_times: [],
+        total_spend: 0,
+        total_units: 0,
+        mu_l: muL,
+        sigma_l: sigmaL,
+        is_cold_start: isCold,
+        risk_status: o.risk_status || 'NORMAL',
+      }
+    }
+
+    const v = vendorMap[vid]
+    v.total_orders += 1
+    v.total_spend += spend
+    v.total_units += qty
+    v.mu_l = muL
+    v.sigma_l = sigmaL
+    if (isCold) v.is_cold_start = true
+
+    if (actualLt !== null && !isNaN(actualLt)) {
+      v.completed_orders += 1
+      v.lead_times.push(actualLt)
+      const delay = actualLt - muL
+      if (delay <= 0) {
+        v.on_time_orders += 1
+      } else {
+        v.delayed_orders += 1
+        v.total_delay_days += delay
+        if (delay > v.max_delay_days) v.max_delay_days = delay
+      }
+    }
+  })
+
+  const scorecards = Object.values(vendorMap).map(v => {
+    const onTimeRate = v.completed_orders > 0
+      ? Number(((v.on_time_orders / v.completed_orders) * 100).toFixed(1))
+      : (v.is_cold_start ? 50.0 : 85.0)
+
+    const avgDelayDays = v.delayed_orders > 0
+      ? Number((v.total_delay_days / v.delayed_orders).toFixed(1))
+      : 0.0
+
+    let grade = 'B'
+    let tier = 'Approved'
+    let tierColor = '#2563eb'
+    let badgeBg = '#dbeafe'
+
+    if (v.is_cold_start) {
+      grade = 'N/A'
+      tier = 'Cold-Start (Unverified)'
+      tierColor = '#7c3aed'
+      badgeBg = '#f3e8ff'
+    } else if (onTimeRate >= 90 && v.sigma_l < 1.65) {
+      grade = 'A'
+      tier = 'Preferred'
+      tierColor = '#16a34a'
+      badgeBg = '#dcfce7'
+    } else if (onTimeRate >= 80 && v.sigma_l <= 1.85) {
+      grade = 'B'
+      tier = 'Approved'
+      tierColor = '#2563eb'
+      badgeBg = '#dbeafe'
+    } else if (onTimeRate >= 70) {
+      grade = 'C'
+      tier = 'Conditional'
+      tierColor = '#d97706'
+      badgeBg = '#fef3c7'
+    } else {
+      grade = 'F'
+      tier = 'High-Risk'
+      tierColor = '#dc2626'
+      badgeBg = '#fee2e2'
+    }
+
+    let plainLanguageSummary = ''
+    if (v.is_cold_start) {
+      plainLanguageSummary = `Supplier ${v.vendor_id} has zero historical delivery records. Scored using fleet fallback parameters (mean lead time ${v.mu_l.toFixed(1)}d, volatility σ_L = ${v.sigma_l.toFixed(2)}d). High predictive uncertainty requires active delivery monitoring.`
+    } else if (grade === 'A') {
+      plainLanguageSummary = `Supplier ${v.vendor_id} demonstrates elite performance with an on-time delivery rate of ${onTimeRate}% across ${v.completed_orders} orders. Lead-time consistency is high (σ_L = ${v.sigma_l.toFixed(2)}d) with minimal delay exposure.`
+    } else if (grade === 'B') {
+      plainLanguageSummary = `Supplier ${v.vendor_id} meets standard procurement requirements with an ${onTimeRate}% on-time rate. Moderate delivery variance (σ_L = ${v.sigma_l.toFixed(2)}d) with average delay of +${avgDelayDays}d on late shipments.`
+    } else if (grade === 'C') {
+      plainLanguageSummary = `Supplier ${v.vendor_id} is flagged under conditional status. On-time delivery has declined to ${onTimeRate}% with an average delay of +${avgDelayDays}d (max delay +${v.max_delay_days.toFixed(1)}d). Buffer safety stock should be maintained.`
+    } else {
+      plainLanguageSummary = `CRITICAL ALERT: Supplier ${v.vendor_id} exhibits chronic delivery delays with only ${onTimeRate}% on-time rate and severe lead-time volatility (σ_L = ${v.sigma_l.toFixed(2)}d). Average shipment delay is +${avgDelayDays} days. Recommend initiating dual-sourcing mitigation or SLA enforcement.`
+    }
+
+    return {
+      vendor_id: v.vendor_id,
+      total_orders: v.total_orders,
+      completed_orders: v.completed_orders,
+      on_time_orders: v.on_time_orders,
+      delayed_orders: v.delayed_orders,
+      on_time_rate: onTimeRate,
+      avg_delay_days: avgDelayDays,
+      max_delay_days: Number(v.max_delay_days.toFixed(1)),
+      mu_l: Number(v.mu_l.toFixed(2)),
+      sigma_l: Number(v.sigma_l.toFixed(2)),
+      total_spend: Number(v.total_spend.toFixed(2)),
+      total_units: v.total_units,
+      grade,
+      tier,
+      tierColor,
+      badgeBg,
+      is_cold_start: v.is_cold_start,
+      plainLanguageSummary,
+    }
+  }).sort((a, b) => b.total_spend - a.total_spend)
+
+  return scorecards
+}
+
+// GET /api/analytics/vendor-scorecards — Returns historical scorecard & on-time stats for each vendor
+app.get('/api/analytics/vendor-scorecards', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('po_id,vendor_id,sku_id,actual_lead_time,predicted_mu_l,predicted_sigma_l,quantity,unit_price,risk_status')
+      .limit(2000)
+
+    if (error) {
+      return res.status(500).json({ error: error.message })
+    }
+
+    const scorecards = buildVendorScorecards(data || [])
+    res.json({
+      count: scorecards.length,
+      scorecards,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── 4. Proxy to Python ML Microservice (FastAPI) ─────────────────────────────
 
 app.post('/api/ml/analyze_risk', async (req, res) => {
