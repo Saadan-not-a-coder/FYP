@@ -10,6 +10,7 @@ prefixed with "COLD_" (e.g. "COLD_CRITICAL") so the dashboard can flag
 them without a schema change.
 """
 
+import os
 from collections import defaultdict
 from datetime import datetime
 from statistics import mean, pstdev
@@ -19,8 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import Client, create_client
 
-SUPABASE_URL = "https://bcnhsbkznrebqchaihbo.supabase.co"
-SUPABASE_KEY = "sb_publishable_5hxw_O-rS0zP4OtAQ5vnsQ__3XzOocl"
+# Read from environment; fall back to the project defaults so local dev
+# works without a .env file.  In production (Render) set these as env vars.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://bcnhsbkznrebqchaihbo.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_5hxw_O-rS0zP4OtAQ5vnsQ__3XzOocl")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 Z_SCORE = 1.65              # 95 % service level

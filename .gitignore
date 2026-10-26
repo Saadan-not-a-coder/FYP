@@ -24,3 +24,8 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets - use .env.example as the template
+.env
+.env.local
+.env.production

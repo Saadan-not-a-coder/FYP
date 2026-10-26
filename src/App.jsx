@@ -6,8 +6,10 @@ import {
 } from 'recharts'
 
 // ── Supabase connection ──────────────────────────────────────────────────────
-const supabaseUrl = 'https://bcnhsbkznrebqchaihbo.supabase.co'
-const supabaseKey = 'sb_publishable_5hxw_O-rS0zP4OtAQ5vnsQ__3XzOocl'
+// Values are injected at build time from VITE_* env vars (see .env.example).
+// Fallbacks let the dev server start without a .env file.
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? 'https://bcnhsbkznrebqchaihbo.supabase.co'
+const supabaseKey = import.meta.env.VITE_SUPABASE_KEY ?? 'sb_publishable_5hxw_O-rS0zP4OtAQ5vnsQ__3XzOocl'
 const supabase = createClient(supabaseUrl, supabaseKey)
 
 // ── Risk thresholds (must match ml_service.py _risk_status) ─────────────────
@@ -162,6 +164,54 @@ function ColoredBar(props) {
   )
 }
 
+// ── Tooltip components declared at module scope to avoid re-creation on render
+function VendorRankingTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{
+      background: '#1e293b', color: '#f8fafc', padding: '10px 14px',
+      borderRadius: '8px', fontSize: '12px', lineHeight: '1.7',
+    }}>
+      <div style={{ fontWeight: '700', marginBottom: '4px' }}>Vendor {d.name}</div>
+      <div>σ_L (std dev): <strong>{d.sigma_l}</strong></div>
+      <div>µ_L (mean LT): <strong>{d.mu_l} days</strong></div>
+      <div>Orders: <strong>{d.orderCount}</strong></div>
+      <div>Revenue at risk: <strong>{formatMoney(d.totalRisk)}</strong></div>
+      <div style={{ marginTop: '6px', color: STATUS_COLOR[d.status], fontWeight: '700' }}>{d.status}</div>
+      {d.coldStart && (
+        <div style={{ color: '#a78bfa', marginTop: '4px', fontSize: '11px' }}>
+          ⚠ Cold-start — fleet average in use
+        </div>
+      )}
+      <div style={{ color: '#94a3b8', marginTop: '4px' }}>Click to view delivery history</div>
+    </div>
+  )
+}
+
+function TimelineTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ background: '#1e293b', color: '#f8fafc', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
+      <div>PO: <strong>{d.po_id}</strong></div>
+      <div>Date: <strong>{d.date}</strong></div>
+      <div>Lead time: <strong>{d.lt} days</strong></div>
+    </div>
+  )
+}
+
+function HistTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ background: '#1e293b', color: '#f8fafc', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
+      <div>Bucket: <strong>{d.bucket} days</strong></div>
+      <div>Orders: <strong>{d.count}</strong></div>
+    </div>
+  )
+}
+
 function VendorRankingChart({ orders, onSelect }) {
   const data = buildVendorSummary(orders, 20)
   if (data.length === 0) return null
@@ -175,30 +225,6 @@ function VendorRankingChart({ orders, onSelect }) {
     orderCount: d.orderCount,
     totalRisk:  d.totalRisk,
   }))
-
-  const CustomTooltip = ({ active, payload }) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload
-    return (
-      <div style={{
-        background: '#1e293b', color: '#f8fafc', padding: '10px 14px',
-        borderRadius: '8px', fontSize: '12px', lineHeight: '1.7',
-      }}>
-        <div style={{ fontWeight: '700', marginBottom: '4px' }}>Vendor {d.name}</div>
-        <div>σ_L (std dev): <strong>{d.sigma_l}</strong></div>
-        <div>µ_L (mean LT): <strong>{d.mu_l} days</strong></div>
-        <div>Orders: <strong>{d.orderCount}</strong></div>
-        <div>Revenue at risk: <strong>{formatMoney(d.totalRisk)}</strong></div>
-        <div style={{ marginTop: '6px', color: STATUS_COLOR[d.status], fontWeight: '700' }}>{d.status}</div>
-        {d.coldStart && (
-          <div style={{ color: '#a78bfa', marginTop: '4px', fontSize: '11px' }}>
-            ⚠ Cold-start — fleet average in use
-          </div>
-        )}
-        <div style={{ color: '#94a3b8', marginTop: '4px' }}>Click to view delivery history</div>
-      </div>
-    )
-  }
 
   return (
     <div style={{
@@ -226,7 +252,7 @@ function VendorRankingChart({ orders, onSelect }) {
           <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={v => v.toFixed(1)}>
             <Label value="σ_L" angle={-90} position="insideLeft" style={{ fontSize: 12, fill: '#94a3b8' }} />
           </YAxis>
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: '#f1f5f950' }} />
+          <Tooltip content={<VendorRankingTooltip />} cursor={{ fill: '#f1f5f950' }} />
           <ReferenceLine y={CRITICAL_THRESHOLD} stroke={STATUS_COLOR.CRITICAL} strokeDasharray="4 3"
             label={{ value: 'CRITICAL', position: 'right', fontSize: 10, fill: STATUS_COLOR.CRITICAL }} />
           <ReferenceLine y={WARNING_THRESHOLD} stroke={STATUS_COLOR.WARNING} strokeDasharray="4 3"
@@ -290,29 +316,6 @@ function VendorModal({ vendorId, onClose, isColdStartVendor }) {
   const sigmaL    = history[0]?.sigmaL ?? 0
   const status    = riskStatus(sigmaL)
   const histogram = buildHistogram(ltValues, 1)
-
-  const TimelineTooltip = ({ active, payload }) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload
-    return (
-      <div style={{ background: '#1e293b', color: '#f8fafc', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
-        <div>PO: <strong>{d.po_id}</strong></div>
-        <div>Date: <strong>{d.date}</strong></div>
-        <div>Lead time: <strong>{d.lt} days</strong></div>
-      </div>
-    )
-  }
-
-  const HistTooltip = ({ active, payload }) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload
-    return (
-      <div style={{ background: '#1e293b', color: '#f8fafc', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
-        <div>Bucket: <strong>{d.bucket} days</strong></div>
-        <div>Orders: <strong>{d.count}</strong></div>
-      </div>
-    )
-  }
 
   return (
     <div onClick={onClose} style={{
@@ -453,9 +456,7 @@ export default function App() {
   const [search,         setSearch]         = useState('')
   const [selectedVendor, setSelectedVendor] = useState(null)
 
-  useEffect(() => { fetchOrders() }, [])
-
-  async function fetchOrders() {
+  const fetchOrders = useCallback(async () => {
     setLoading(true)
     try {
       const { data, error } = await supabase
@@ -472,7 +473,9 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => { fetchOrders() }, [fetchOrders])
 
   const openVendor  = useCallback(vid => setSelectedVendor(vid), [])
   const closeVendor = useCallback(() => setSelectedVendor(null), [])

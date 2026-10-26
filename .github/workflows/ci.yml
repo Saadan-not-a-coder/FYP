@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, Ahzam, master]
+  pull_request:
+    branches: [main, Ahzam, master]
+
+jobs:
+  # ── React Frontend: lint + build ───────────────────────────────────────────
+  frontend:
+    name: Frontend Build & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter (oxlint)
+        run: npm run lint
+
+      - name: Build production bundle (Vite)
+        run: npm run build
+        env:
+          # Dummy values are sufficient to satisfy the build-time env references
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY || 'placeholder-key' }}
+
+  # ── Python ML Service: syntax + dependency install ─────────────────────────
+  backend:
+    name: Backend Lint & Import Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile Python files (syntax verification)
+        run: |
+          python -m py_compile ml_service.py
+          python -m py_compile run_all_orders.py
+
+      - name: Smoke-test FastAPI app import
+        run: |
+          python -c "from ml_service import app; print('FastAPI app imported cleanly')"
+        env:
+          SUPABASE_URL: 'https://placeholder.supabase.co'
+          SUPABASE_KEY: 'placeholder-key'

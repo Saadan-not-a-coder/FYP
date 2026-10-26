@@ -1,0 +1,20 @@
+# Render Blueprint — Deploy the Python ML API as a free Web Service
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: supply-chain-risk-api
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn ml_service:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SUPABASE_URL
+        sync: false  # enter in Render dashboard under Environment
+      - key: SUPABASE_KEY
+        sync: false  # enter in Render dashboard under Environment
