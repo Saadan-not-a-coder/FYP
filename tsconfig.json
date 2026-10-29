@@ -10,6 +10,7 @@
     "paths": {
       "@/*": ["./src/*"]
     },
+    "allowJs": true,
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
