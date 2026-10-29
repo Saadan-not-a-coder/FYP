@@ -75,7 +75,7 @@ export default function RiskBadge({
           }}
           title="Inspect SHAP Machine Learning Delay Risk Attribution"
         >
-          💡 Explain
+          Explain
         </button>
       )}
 
@@ -100,7 +100,7 @@ export default function RiskBadge({
           }}
           title="Open Prescriptive Supplier Mitigation Center"
         >
-          ⚡ Mitigate
+          Mitigate
         </button>
       )}
     </div>

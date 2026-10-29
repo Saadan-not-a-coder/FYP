@@ -91,7 +91,6 @@ export default function OrderRiskExplanationModal({ order, onClose, onOpenMitiga
         }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-              <span style={{ fontSize: '18px' }}>🤖</span>
               <h2 style={{ margin: 0, fontSize: '17px', fontWeight: '800', color: '#0f172a' }}>
                 Machine Learning Delay Risk Explanation
               </h2>
@@ -107,7 +106,7 @@ export default function OrderRiskExplanationModal({ order, onClose, onOpenMitiga
               color: '#64748b', padding: '4px 8px', borderRadius: '6px',
             }}
           >
-            ✕
+            Close
           </button>
         </div>
 
@@ -158,7 +157,7 @@ export default function OrderRiskExplanationModal({ order, onClose, onOpenMitiga
           {/* Plain Language Explanation Narrative */}
           <div>
             <div style={{ fontSize: '12px', fontWeight: '700', color: '#475569', textTransform: 'uppercase', marginBottom: '6px' }}>
-              📖 Plain-Language ML Explanation
+              Plain-Language ML Explanation
             </div>
             <div style={{
               backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px',
@@ -173,7 +172,7 @@ export default function OrderRiskExplanationModal({ order, onClose, onOpenMitiga
             backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px',
             padding: '12px 16px', fontSize: '12.5px', color: '#1e40af',
           }}>
-            <strong style={{ display: 'block', marginBottom: '2px' }}>🎯 Recommended Procurement Policy:</strong>
+            <strong style={{ display: 'block', marginBottom: '2px' }}>Recommended Procurement Policy:</strong>
             {info.recommendation}
           </div>
 
@@ -205,7 +204,7 @@ export default function OrderRiskExplanationModal({ order, onClose, onOpenMitiga
                 boxShadow: '0 2px 6px rgba(124, 58, 237, 0.25)',
               }}
             >
-              ⚡ Open Prescriptive Mitigation Center
+              Open Prescriptive Mitigation Center
             </button>
           )}
         </div>

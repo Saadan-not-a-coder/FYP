@@ -264,7 +264,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>
-              📊 Core Spend Analytics & Vendor Concentration
+              Core Spend Analytics & Vendor Concentration
             </h2>
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
               Purchasing totals broken down by vendor, category, and time period with mathematical reconciliation and HHI concentration diagnostics.
@@ -279,7 +279,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
               boxShadow: '0 2px 6px rgba(15, 118, 110, 0.25)',
             }}
           >
-            📥 Export Spend Audit Report (CSV)
+            Export Spend Audit Report (CSV)
           </button>
         </div>
 
@@ -420,7 +420,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
             Spend Reconciliation
           </div>
           <div style={{ fontSize: '22px', fontWeight: '800', color: '#15803d', margin: '6px 0 2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            ✓ 100.0% Reconciled
+            100.0% Reconciled
           </div>
           <div style={{ fontSize: '12px', color: '#166534' }}>
             Delta: $0.00 across vendors & categories
@@ -602,7 +602,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
           <div>
             <h3 style={{ margin: '0 0 2px', fontSize: '15px', fontWeight: '700', color: '#0f172a' }}>
-              📋 Source File Spend Reconciliation Audit Statement
+              Source File Spend Reconciliation Audit Statement
             </h3>
             <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b' }}>
               Mathematically verifies that multi-dimensional spend rollups reconcile to the cent against raw ingested orders ($0.00 delta).
@@ -612,7 +612,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
             backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0',
             padding: '3px 10px', borderRadius: '9999px', fontSize: '11.5px', fontWeight: '700',
           }}>
-            ✓ Audit Verified (Zero Leakage)
+            Audit Verified (Zero Leakage)
           </span>
         </div>
 
@@ -637,7 +637,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
                 </td>
                 <td style={{ padding: '12px 14px' }}>
                   <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>
-                    ✓ 100% Reconciled
+                    100% Reconciled
                   </span>
                 </td>
               </tr>
@@ -650,7 +650,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
                 </td>
                 <td style={{ padding: '12px 14px' }}>
                   <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>
-                    ✓ 100% Reconciled
+                    100% Reconciled
                   </span>
                 </td>
               </tr>
@@ -663,7 +663,7 @@ export default function SpendAnalyticsView({ orders = [] }) {
                 </td>
                 <td style={{ padding: '12px 14px' }}>
                   <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700' }}>
-                    ✓ 100% Reconciled
+                    100% Reconciled
                   </span>
                 </td>
               </tr>

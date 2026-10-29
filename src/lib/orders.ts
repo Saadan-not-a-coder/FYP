@@ -56,15 +56,19 @@ export function toIdentifier(value: unknown): string {
 }
 
 export function classifyRisk(predictedSigmaL: number | null, riskStatusStr?: string): RiskLevel {
+  if (predictedSigmaL !== null) {
+    if (predictedSigmaL > 1.85) return "CRITICAL"
+    if (predictedSigmaL > 1.65) return "WARNING"
+    return "NORMAL"
+  }
+
   if (typeof riskStatusStr === "string") {
     if (riskStatusStr.includes("CRITICAL")) return "CRITICAL"
     if (riskStatusStr.includes("WARNING")) return "WARNING"
     if (riskStatusStr.includes("NORMAL")) return "NORMAL"
   }
-  if (predictedSigmaL === null) return "UNAVAILABLE"
-  if (predictedSigmaL > 1.85) return "CRITICAL"
-  if (predictedSigmaL > 1.65) return "WARNING"
-  return "NORMAL"
+
+  return "UNAVAILABLE"
 }
 
 export async function fetchProcessedOrders(): Promise<Order[]> {

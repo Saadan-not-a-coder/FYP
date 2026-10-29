@@ -240,7 +240,7 @@ export default function VendorScorecardsView({ orders = [], onSelectVendor, onOp
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>
-              ⭐ Vendor Historical Scorecards & On-Time Performance Scoring
+              Vendor Historical Scorecards & On-Time Performance Scoring
             </h2>
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
               Track supplier delivery reliability, average delays, and ML volatility scoring with attached plain-language explanations.
@@ -255,7 +255,7 @@ export default function VendorScorecardsView({ orders = [], onSelectVendor, onOp
               boxShadow: '0 2px 6px rgba(15, 118, 110, 0.25)',
             }}
           >
-            📥 Export Vendor Scorecards (CSV)
+            Export Vendor Scorecards (CSV)
           </button>
         </div>
 
@@ -490,7 +490,7 @@ export default function VendorScorecardsView({ orders = [], onSelectVendor, onOp
               padding: '10px 12px', borderRadius: '6px', fontSize: '12px', color: '#334155', lineHeight: '1.45',
             }}>
               <span style={{ fontWeight: '700', display: 'block', color: scorecard.tierColor, marginBottom: '2px', fontSize: '11px' }}>
-                💡 Attached Performance Assessment
+                Attached Performance Assessment
               </span>
               {scorecard.plainLanguageSummary}
             </div>
@@ -505,7 +505,7 @@ export default function VendorScorecardsView({ orders = [], onSelectVendor, onOp
                   display: 'inline-flex', alignItems: 'center', gap: '4px',
                 }}
               >
-                🔍 Inspect Delivery History
+                Inspect Delivery History
               </button>
 
               {(scorecard.grade === 'F' || scorecard.grade === 'C') && onOpenMitigation && (
@@ -517,7 +517,7 @@ export default function VendorScorecardsView({ orders = [], onSelectVendor, onOp
                     display: 'inline-flex', alignItems: 'center', gap: '4px',
                   }}
                 >
-                  ⚡ Mitigate Risk
+                  Mitigate Risk
                 </button>
               )}
             </div>

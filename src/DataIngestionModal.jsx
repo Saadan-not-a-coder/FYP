@@ -323,7 +323,7 @@ export default function DataIngestionModal({
         }}>
           <div>
             <h2 style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: '700', color: '#0f172a' }}>
-              📥 Purchase Order Data Ingestion & Row-Level Validation
+              Purchase Order Data Ingestion & Row-Level Validation
             </h2>
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
               Upload CSV or Excel files. Corrupt rows are quarantined with error reports before reaching the analytics engine.
@@ -336,7 +336,7 @@ export default function DataIngestionModal({
               color: '#64748b', padding: '4px 8px', borderRadius: '6px',
             }}
           >
-            ✕
+            Close
           </button>
         </div>
 
@@ -367,7 +367,6 @@ export default function DataIngestionModal({
                 }
               }}
             />
-            <div style={{ fontSize: '32px', marginBottom: '8px' }}>📁</div>
             <div style={{ fontWeight: '600', color: '#1e293b', fontSize: '14px' }}>
               {selectedFile ? selectedFile.name : 'Click to select or drag & drop CSV / Excel (.xlsx) file'}
             </div>
@@ -386,14 +385,14 @@ export default function DataIngestionModal({
                 display: 'inline-flex', alignItems: 'center', gap: '4px',
               }}
             >
-              📄 Download Sample Template (Contains valid & test corrupt rows)
+              Download Sample Template (Contains valid & test corrupt rows)
             </button>
           </div>
 
           {/* Loading Indicator */}
           {analyzing && (
             <div style={{ textAlign: 'center', padding: '20px', color: '#3b82f6', fontWeight: '600', fontSize: '14px' }}>
-              ⏳ Parsing file & executing row-level constraint validation...
+              Parsing file & executing row-level constraint validation...
             </div>
           )}
 
@@ -445,7 +444,7 @@ export default function DataIngestionModal({
                       color: activeTab === 'quarantined' ? '#dc2626' : '#64748b',
                     }}
                   >
-                    🚨 Quarantined Rows ({ingestResult.quarantined_count})
+                    Quarantined Rows ({ingestResult.quarantined_count})
                   </button>
                   <button
                     onClick={() => setActiveTab('valid')}
@@ -455,7 +454,7 @@ export default function DataIngestionModal({
                       color: activeTab === 'valid' ? '#16a34a' : '#64748b',
                     }}
                   >
-                    ✓ Clean Valid Rows ({ingestResult.valid_count})
+                    Clean Valid Rows ({ingestResult.valid_count})
                   </button>
                 </div>
 
@@ -468,7 +467,7 @@ export default function DataIngestionModal({
                       borderRadius: '6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px',
                     }}
                   >
-                    📥 Download Quarantine Error Report (CSV)
+                    Download Quarantine Error Report (CSV)
                   </button>
                 )}
               </div>
@@ -478,7 +477,7 @@ export default function DataIngestionModal({
                 <div>
                   {ingestResult.quarantined_count === 0 ? (
                     <div style={{ padding: '24px', textAlign: 'center', color: '#16a34a', backgroundColor: '#f0fdf4', borderRadius: '8px' }}>
-                      🎉 Zero validation errors detected! 100% of rows meet data schema standards.
+                      Zero validation errors detected! 100% of rows meet data schema standards.
                     </div>
                   ) : (
                     <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid #fecaca', borderRadius: '8px' }}>
@@ -578,7 +577,7 @@ export default function DataIngestionModal({
               boxShadow: '0 2px 6px rgba(22, 163, 74, 0.2)',
             }}
           >
-            {committing ? '⏳ Committing Clean Records...' : `✓ Ingest ${ingestResult ? ingestResult.valid_count : 0} Clean Orders`}
+            {committing ? 'Committing Clean Records...' : `Ingest ${ingestResult ? ingestResult.valid_count : 0} Clean Orders`}
           </button>
         </div>
       </div>

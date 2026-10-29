@@ -133,7 +133,7 @@ export default function OrdersTable({
               cursor: "pointer",
             }}
           >
-            📥 Export CSV
+            Export CSV
           </button>
         </div>
       </div>

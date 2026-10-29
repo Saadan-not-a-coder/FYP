@@ -215,7 +215,7 @@ function VendorModal({
               fontWeight: 600,
             }}
           >
-            ✕ Close
+            Close
           </button>
         </div>
 
@@ -377,7 +377,7 @@ function MitigationModal({
               fontWeight: 600,
             }}
           >
-            ✕ Close
+            Close
           </button>
         </div>
 
@@ -445,6 +445,7 @@ function MitigationModal({
 // ── Main App Shell with Unified Navigation Rail ──────────────────────────────
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("overview")
+  const [isRailCollapsed, setIsRailCollapsed] = useState(false)
   const [orders, setOrders] = useState<Order[]>([])
   const [loadState, setLoadState] = useState<LoadState>("loading")
   const [errorMessage, setErrorMessage] = useState("")
@@ -574,13 +575,19 @@ export default function App() {
     : "Awaiting sync"
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isRailCollapsed ? " app-shell--rail-collapsed" : ""}`}>
       {/* ── 1. Yaman's Navigation Rail ─────────────────────────────────────── */}
       <aside className="navigation-rail" aria-label="Primary navigation">
         <div className="brand">
-          <span className="brand__mark">
+          <button
+            className="brand__mark"
+            type="button"
+            onClick={() => setIsRailCollapsed((collapsed) => !collapsed)}
+            aria-label={isRailCollapsed ? "Expand navigation" : "Collapse navigation"}
+            title={isRailCollapsed ? "Expand navigation" : "Collapse navigation"}
+          >
             <SpendSenseLogo />
-          </span>
+          </button>
           <span className="brand__name">
             Spend
             <br />
@@ -596,7 +603,8 @@ export default function App() {
             tabIndex={0}
           >
             <span className="nav-item__index">01</span>
-            Risk & Supply
+            <span className="nav-item__label">Risk & Supply</span>
+            <span className="nav-item__tooltip">Risk & Supply: monitor order risk and supply volatility</span>
           </div>
 
           <div
@@ -606,7 +614,8 @@ export default function App() {
             tabIndex={0}
           >
             <span className="nav-item__index">02</span>
-            Spend Analytics
+            <span className="nav-item__label">Spend Analytics</span>
+            <span className="nav-item__tooltip">Spend Analytics: review purchasing and vendor concentration</span>
           </div>
 
           <div
@@ -616,20 +625,10 @@ export default function App() {
             tabIndex={0}
           >
             <span className="nav-item__index">03</span>
-            Vendor Scores
+            <span className="nav-item__label">Vendor Scores</span>
+            <span className="nav-item__tooltip">Vendor Scores: compare supplier performance and reliability</span>
           </div>
         </nav>
-
-        <div className="rail-status">
-          <span
-            className={`status-dot${loadState === "error" ? " status-dot--error" : ""}`}
-            aria-hidden="true"
-          />
-          <div>
-            <strong>Live dataset</strong>
-            <span>{loadState === "error" ? "Connection failed" : "Supabase connected"}</span>
-          </div>
-        </div>
       </aside>
 
       {/* ── 2. Main Content Area ───────────────────────────────────────────── */}
@@ -690,7 +689,7 @@ export default function App() {
                   cursor: "pointer",
                 }}
               >
-                📥 Ingest CSV
+                Ingest CSV
               </button>
 
               {activeTab === "overview" && (
@@ -709,7 +708,7 @@ export default function App() {
                     cursor: "pointer",
                   }}
                 >
-                  🔮 What-If Simulator
+                  What-If Simulator
                 </button>
               )}
 
