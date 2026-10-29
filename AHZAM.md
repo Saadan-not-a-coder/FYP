@@ -671,14 +671,22 @@ To address critical architectural gaps identified prior to the final defense exa
 The legacy `ml_service.py` solely calculated descriptive sample statistics ($\mu_L, \sigma_L$) across historic deliveries and labeled it "machine learning." It lacked true predictive modeling for purchase order delay risk, and would break or mischaracterize new SME tenants who possess zero historical delivery records.
 
 #### What was done
-- **Two-Stage Hurdle Model Architecture**:
-  - **Stage 1 (Binary Classification)**: Utilizes `joblib` to load `delay_classifier.pkl` (e.g., Random Forest or Gradient Boosted Classifier) to predict the conditional probability of shipment lateness:
-    $$P(\text{Late} \mid \mathbf{x}) \in [0, 1]$$
-  - **Stage 2 (Truncated Regression)**: Utilizes `delay_regressor.pkl` to estimate the delay magnitude (days delayed beyond schedule) conditioned on delivery slippage:
-    $$\Delta_L = \max(0, \hat{f}_{\text{reg}}(\mathbf{x}))$$
-  - **Hurdle Compound Lead-Time Expectation**:
-    $$\mu_L^{\text{hurdle}} = \text{promised\_lead\_time} + P(\text{Late}) \cdot \Delta_L$$
-    $$\sigma_L^{\text{hurdle}} = \sqrt{\sigma_L^2 + P(\text{Late}) \cdot (\Delta_L)^2}$$
+- **Two-Stage Hurdle Model Architecture & Training (`train_xgboost.py`)**:
+  - **Feature Vector Definition**: Uses the 6 standardized procurement features:
+    $$\mathbf{x} = [\text{quantity}, \text{unit\_price}, \text{promised\_lead\_time}, n_{\text{history}}, \mu_L, \sigma_L]$$
+  - **Stage 1 (Binary Classification — Delay Probability)**:
+    - Trained via `train_xgboost.py` utilizing `xgb.XGBClassifier(eval_metric='logloss', max_depth=4, learning_rate=0.1)` on the target label `is_late`:
+      $$P(\text{Late} \mid \mathbf{x}) \in [0, 1]$$
+    - Serialized to disk as [`delay_classifier.pkl`](file:///c:/Users/A-ONE%20LAPTOP/FYP/FYP/delay_classifier.pkl) (157 KB).
+  - **Stage 2 (Truncated Regression — Delay Magnitude)**:
+    - Trained strictly on positive delay instances ($y_{\text{delay}} > 0$) utilizing `xgb.XGBRegressor(objective='reg:squarederror', max_depth=4, learning_rate=0.1)` on target `delay_days`:
+      $$\Delta_L = \max(0, \hat{f}_{\text{reg}}(\mathbf{x}))$$
+    - Serialized to disk as [`delay_regressor.pkl`](file:///c:/Users/A-ONE%20LAPTOP/FYP/FYP/delay_regressor.pkl) (164 KB).
+  - **Inference Integration (`ml_service.py`)**:
+    - Microservice loads both `.pkl` models using `joblib.load()`.
+    - Evaluates compound expected lead time and dynamic lead-time volatility:
+      $$\mu_L^{\text{hurdle}} = \text{promised\_lead\_time} + P(\text{Late}) \cdot \Delta_L$$
+      $$\sigma_L^{\text{hurdle}} = \sqrt{\sigma_L^2 + P(\text{Late}) \cdot (\Delta_L)^2}$$
 - **Cold-Start Fallback Engine**:
   - Implemented conditional gating in `run_hurdle_inference()`: if a new tenant or vendor has no historical orders ($n = 0$), OR if serialized `.pkl` models fail to load from disk, the engine gracefully transitions to the **Cold-Start Statistical Baseline**:
     $$\mu_L = 7.0 \text{ days}, \quad \sigma_L = 2.0 \text{ days}, \quad P(\text{Late}) = 0.50$$
@@ -880,5 +888,5 @@ Because Vite resolves `.jsx` before `.tsx` by default, the legacy `App.jsx` was 
 | **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, HHI & reconciliation CSV | Complete |
 | **4.4** | Vendor Historical Scorecards & On-Time Scoring | `server/index.js`, `src/VendorScorecardsView.jsx`, `OrderRiskExplanationModal.jsx` | Complete |
 | **4.5** | SpendSense Rebranding & Port De-Conflict | `index.html`, `vite.config.ts`, `server/index.js` (`deriveCategory`) | Complete |
-| **5.0** | Final Defense Refactoring (5 Rectifications) | `ml_service.py` (Hurdle, SHAP, Croston SBA), `server/index.js` (Job Queue, RLS) | Complete |
+| **5.0** | Final Defense Refactoring (5 Rectifications) | `ml_service.py` (Hurdle, SHAP, Croston SBA), `train_xgboost.py` (`.pkl` models), `server/index.js` (Job Queue, RLS) | Complete |
 | **5.6** | Production UI Unification & TypeScript Migration | `src/App.tsx`, `OrdersTable.tsx`, `RiskBadge.tsx`, `src/lib/orders.ts` | Complete |
