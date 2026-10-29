@@ -633,6 +633,176 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 
 ---
 
+## 4.5 SpendSense Platform Rebranding, Schema Reconciliation & Port De-Conflict
+
+**Status:** complete
+
+### What was done
+
+1. **Official Platform Rebranding to SpendSense**
+   - Transformed the platform identity from "VendorWise" to **SpendSense: Risk-Aware Procurement & Spend Analytics Platform for SMEs**.
+   - Updated `index.html` application title, viewport metadata, and navigation header branding.
+   - Synchronized gateway and microservice identifiers across backend health probes and console banners.
+
+2. **Database Schema Reconciliation (`orders.category` Fix)**
+   - Identified that the production Supabase PostgreSQL `orders` table does not possess a physical `category` column (`column orders.category does not exist`).
+   - Refactored `server/index.js` and `src/App.jsx` SQL queries to remove `category` from direct database `SELECT` statements, eliminating 500 runtime exceptions.
+   - Implemented an algorithmic category derivation engine (`deriveCategory(order)`):
+     - Derives product categories dynamically from SKU prefix classification (`SKU-1xxx` $\to$ Electronics & Tech, `SKU-2xxx` $\to$ Industrial Hardware, `SKU-3xxx` $\to$ Raw Materials, etc.).
+     - Preserves explicit CSV category assignments in memory during spend aggregation and Pareto analysis.
+
+3. **Port Conflict Elimination & Vite Configuration**
+   - User encountered port collision on default Vite ports `5173` and `5174` due to concurrent background projects.
+   - Reconfigured `vite.config.ts` to explicitly bind development traffic to port `5185` (with fallback to `5186`), ensuring isolated, crash-free execution alongside Node.js Gateway (port `5000`) and FastAPI microservice (port `8000`).
+
+---
+
+## 5.0 Final Defense Architecture: Production Refactoring (The 5 Critical Rectifications)
+
+**Status:** complete
+
+To address critical architectural gaps identified prior to the final defense examination, the core ML inference microservice (`ml_service.py`) and API Gateway (`server/index.js`) were aggressively refactored. The refactoring elevates SpendSense from a statistical proof-of-concept into a multi-tenant, event-driven, explainable ML cloud system.
+
+---
+
+### 5.1 Rectification 1: Cold-Start Baseline vs. Two-Stage Hurdle ML Inference
+
+#### The Problem
+The legacy `ml_service.py` solely calculated descriptive sample statistics ($\mu_L, \sigma_L$) across historic deliveries and labeled it "machine learning." It lacked true predictive modeling for purchase order delay risk, and would break or mischaracterize new SME tenants who possess zero historical delivery records.
+
+#### What was done
+- **Two-Stage Hurdle Model Architecture**:
+  - **Stage 1 (Binary Classification)**: Utilizes `joblib` to load `delay_classifier.pkl` (e.g., Random Forest or Gradient Boosted Classifier) to predict the conditional probability of shipment lateness:
+    $$P(\text{Late} \mid \mathbf{x}) \in [0, 1]$$
+  - **Stage 2 (Truncated Regression)**: Utilizes `delay_regressor.pkl` to estimate the delay magnitude (days delayed beyond schedule) conditioned on delivery slippage:
+    $$\Delta_L = \max(0, \hat{f}_{\text{reg}}(\mathbf{x}))$$
+  - **Hurdle Compound Lead-Time Expectation**:
+    $$\mu_L^{\text{hurdle}} = \text{promised\_lead\_time} + P(\text{Late}) \cdot \Delta_L$$
+    $$\sigma_L^{\text{hurdle}} = \sqrt{\sigma_L^2 + P(\text{Late}) \cdot (\Delta_L)^2}$$
+- **Cold-Start Fallback Engine**:
+  - Implemented conditional gating in `run_hurdle_inference()`: if a new tenant or vendor has no historical orders ($n = 0$), OR if serialized `.pkl` models fail to load from disk, the engine gracefully transitions to the **Cold-Start Statistical Baseline**:
+    $$\mu_L = 7.0 \text{ days}, \quad \sigma_L = 2.0 \text{ days}, \quad P(\text{Late}) = 0.50$$
+  - Tags order records with `hurdle_class = 'COLD_START_STATISTICAL_BASELINE'` and `risk_status = 'COLD_WARNING'`, ensuring zero downtime and complete defense defensibility.
+
+---
+
+### 5.2 Rectification 2: Dynamic SHAP Explainability & Failing-Step Feature Attribution
+
+#### The Problem
+The previous risk explanations were static text strings mapped to arbitrary standard deviation thresholds, failing to explain *why* an order was flagged as delayed or what operational variables were responsible.
+
+#### What was done
+- **SHAP (SHapley Additive exPlanations) Integration**:
+  - Integrated `shap` into the FastAPI `/api/analyze_risk` inference pipeline.
+  - Generates Shapley values across the incoming feature vector:
+    $$\mathbf{x} = [\text{quantity}, \text{unit\_price}, \text{promised\_lead\_time}, n_{\text{history}}, \mu_L^{\text{vendor}}, \sigma_L^{\text{vendor}}]$$
+  - Ranks feature contributions by absolute Shapley magnitude to isolate the primary failing-step attribution:
+    $$k^* = \arg\max_k |\phi_k|$$
+- **Dynamic Plain-Language Explanation Generator**:
+  - Dynamically synthesizes natural-language explanations based on the top positive and negative drivers:
+    - *Example*: `"SHAP Attribution Analysis: Delay probability is 84.2%. The primary driver is 'order quantity' which elevates delay risk by +2.82 impact points. Lead time volatility is severe (sigma_L > 1.85d); recommend dual-sourcing splits."*
+  - Provides mathematical and visual auditability for non-technical procurement officers.
+
+---
+
+### 5.3 Rectification 3: Advanced Intermittent Demand Forecasting (Croston's Method + SBA via statsmodels)
+
+#### The Problem
+The legacy `sku_daily_demand()` computed a naive daily arithmetic average assuming normally distributed, steady demand. Real-world SME procurement exhibits intermittent and "lumpy" purchase patterns with numerous non-demand periods, causing Gaussian inventory models to over-buffer inventory and lock up cash.
+
+#### What was done
+- **Demand Profiling (Syntetos & Boylan Categorization)**:
+  - Formulated the **Average Inter-Demand Interval (ADI)**:
+    $$\text{ADI} = \frac{1}{N-1} \sum_{i=1}^{N-1} (t_{i+1} - t_i)$$
+  - Formulated the **Squared Coefficient of Variation ($CV^2$)**:
+    $$CV^2 = \left( \frac{\sigma_y}{\mu_y} \right)^2$$
+  - Categorizes SKU demand profile according to academic supply chain standards:
+    - **Smooth**: $\text{ADI} < 1.32$ and $CV^2 < 0.49$
+    - **Intermittent**: $\text{ADI} \ge 1.32$ and $CV^2 < 0.49$
+    - **Erratic**: $\text{ADI} < 1.32$ and $CV^2 \ge 0.49$
+    - **Lumpy**: $\text{ADI} \ge 1.32$ and $CV^2 \ge 0.49$
+- **Croston's Method with Syntetos-Boylan Approximation (SBA)**:
+  - When $\text{ADI} \ge 1.32$ (intermittent or lumpy demand), the engine applies Croston's decomposition using exponential smoothing ($\alpha = 0.15$):
+    $$z_t = \alpha y_t + (1 - \alpha) z_{t-1} \quad (\text{Demand Size})$$
+    $$p_t = \alpha q_t + (1 - \alpha) p_{t-1} \quad (\text{Inter-arrival Period})$$
+  - Standard Croston forecasting exhibits positive bias; the **Syntetos-Boylan Approximation (SBA)** corrects this bias with factor $(1 - \frac{\alpha}{2})$:
+    $$\hat{\mu}_d^{\text{SBA}} = \left(1 - \frac{\alpha}{2}\right) \frac{z_t}{p_t}$$
+  - Accurately projects daily demand $\mu_d$ and standard deviation $\sigma_d$, directly feeding the risk-adjusted Safety Stock formulation:
+    $$SS = Z \cdot \sqrt{\mu_L \sigma_d^2 + \mu_d^2 \sigma_L^2}$$
+
+---
+
+### 5.4 Rectification 4: Event-Driven Job Queue with Concurrent Locking (SELECT FOR UPDATE SKIP LOCKED)
+
+#### The Problem
+The legacy Node.js API processed batch CSV ingestion and invoked the Python ML microservice synchronously. Under large uploads (e.g. 1,000+ purchase orders), HTTP requests timed out, tying up worker threads and causing frontend connection drops.
+
+#### What was done
+- **Asynchronous 202 Accepted Ingestion Protocol**:
+  - Refactored `POST /api/ingest/confirm` in `server/index.js`.
+  - Upon receiving and validating clean orders, the Gateway immediately inserts an event job into the Supabase `jobs` table (`status: 'pending'`, `total_orders: N`) and returns HTTP `202 Accepted` with a tracking `job_id` and poll URL (`/api/jobs/:id`).
+- **Concurrent Polling Worker (SELECT FOR UPDATE SKIP LOCKED)**:
+  - Implemented an autonomous background worker executing every 3 seconds.
+  - Implements PostgreSQL `SELECT FOR UPDATE SKIP LOCKED` concurrency semantics:
+    - Atomically claims pending jobs without race conditions across multiple server instances.
+    - Transitions job to `status: 'processing'`.
+    - Upserts clean orders into Supabase and invokes `/api/analyze_risk` on the FastAPI microservice asynchronously.
+    - Updates progress incrementally (`processed_orders`) and transitions status to `'completed'`.
+  - Built-in resilient memory queue fallback guarantees continuous operation even if the remote database is undergoing maintenance.
+
+---
+
+### 5.5 Rectification 5: Strict Multi-Tenancy & Row-Level Security (RLS)
+
+#### The Problem
+The previous API Gateway executed queries across a shared table without enforcing tenant isolation boundaries. Company A could theoretically inspect or modify purchase orders belonging to Company B.
+
+#### What was done
+- **Express Multi-Tenant Security Middleware (`multiTenantMiddleware`)**:
+  - Intercepts all incoming API requests.
+  - Decodes the Supabase Auth JWT token from `Authorization: Bearer <token>`.
+  - Strictly extracts `tenant_id` from secure `app_metadata` (assigned during enterprise provisioning).
+  - Dynamically invokes PostgreSQL configuration:
+    ```sql
+    SELECT set_config('app.tenant_id', '<tenant_uuid>', true);
+    ```
+  - Attaches `req.tenantId` to the request context and scopes all database operations:
+    - `orders` queries: `.eq('tenant_id', req.tenantId)`
+    - `jobs` queue: `.eq('tenant_id', req.tenantId)`
+    - `analytics` rollups: filtered strictly to the calling tenant's records.
+  - Guarantees complete Row-Level Security (RLS) isolation across enterprise clients.
+
+---
+
+### Why it was done this way
+
+1. **Academic Rigor & Defense Viability**: Moving from static descriptive statistics ($\mu_L, \sigma_L$) to an empirical Two-Stage Hurdle Model, SHAP explainability, and Croston SBA forecasting transforms SpendSense into a defensible ML final-year project.
+2. **Cloud Scalability (Non-Blocking I/O)**: Event-driven job processing with `202 Accepted` decoupling protects the Node.js event loop from ML microservice inference latency.
+3. **Enterprise Security (Multi-Tenancy)**: RLS enforcement at both the middleware and database level ensures compliance with enterprise procurement confidentiality standards.
+
+---
+
+### How to verify
+
+1. **Verify FastAPI ML Engine & Hurdle Inference:**
+   ```bash
+   python -c "from ml_service import run_hurdle_inference, compute_shap_attribution; h = run_hurdle_inference('V-101', 'SKU-50', 100, 45.0, 7.0, 7.5, 2.1, 15, 8.2); print(h); print(compute_shap_attribution(h))"
+   ```
+   - Confirm `hurdle_mode` executes cleanly and outputs $P(\text{Late})$ and $\Delta_L$.
+   - Confirm SHAP attribution produces a dynamic plain-language explanation.
+
+2. **Verify Node.js Gateway & Multi-Tenant Middleware:**
+   ```bash
+   node -c server/index.js
+   ```
+   - Inspect startup logs: confirm `Multi-tenancy RLS middleware: ACTIVE` and `Event-Driven Job Queue Worker: ACTIVE`.
+
+3. **Verify Asynchronous 202 Ingestion:**
+   - Submit CSV batch via `POST /api/ingest/confirm`.
+   - Confirm immediate HTTP `202 Accepted` response with `job_id` and poll status at `GET /api/jobs/:id`.
+
+---
+
 ## Roadmap completion summary
 
 | Section | Feature | Key Artifacts | Status |
@@ -648,3 +818,5 @@ Following the completion of MVP sections 3.1–3.7, Sprint 4 expands the platfor
 | **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, `App.jsx`, quarantine error CSV | Complete |
 | **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, `App.jsx`, HHI & reconciliation CSV | Complete |
 | **4.4** | Vendor Historical Scorecards & On-Time Scoring | `server/index.js`, `src/VendorScorecardsView.jsx`, `src/OrderRiskExplanationModal.jsx`, `App.jsx` | Complete |
+| **4.5** | SpendSense Rebranding & Port De-Conflict | `index.html`, `vite.config.ts`, `server/index.js` (`deriveCategory`) | Complete |
+| **5.0** | Final Defense Refactoring (5 Rectifications) | `ml_service.py` (Hurdle, SHAP, Croston SBA), `server/index.js` (Job Queue, RLS) | Complete |

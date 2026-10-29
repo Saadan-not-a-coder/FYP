@@ -3,3 +3,9 @@ uvicorn
 supabase
 pydantic
 requests
+joblib
+scikit-learn
+statsmodels
+shap
+numpy
+pandas
