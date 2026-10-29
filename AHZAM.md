@@ -803,20 +803,82 @@ The previous API Gateway executed queries across a shared table without enforcin
 
 ---
 
+### 5.6 Production UI Unification, Design System Integration & TypeScript Migration (Option A)
+
+#### The Problem
+Following the merge with Yaman's redesign branch (`4993b3d`), the application had two competing entry points: `src/App.jsx` (which held the complete multi-tab feature suite from Sprints 3 & 4) and `src/App.tsx` (which held Yaman's new editorial UI design system with left navigation rail, metrics grid, and warm canvas theme). 
+
+Because Vite resolves `.jsx` before `.tsx` by default, the legacy `App.jsx` was silently mounted, hiding the new design system. Conversely, switching solely to Yaman's early `App.tsx` lost the Spend Analytics, Vendor Scorecards, What-If Simulation, and CSV Ingestion features.
+
+#### What was done
+- **Unified TypeScript Architecture (`src/App.tsx`)**:
+  - Fully migrated and merged all views, modals, and charts into [`src/App.tsx`](file:///c:/Users/A-ONE%20LAPTOP/FYP/FYP/src/App.tsx) and cleanly retired the obsolete `src/App.jsx`.
+  - Configured [`src/main.tsx`](file:///c:/Users/A-ONE%20LAPTOP/FYP/FYP/src/main.tsx) to mount `App.tsx` explicitly.
+  - Added `"allowJs": true` to [`tsconfig.json`](file:///c:/Users/A-ONE%20LAPTOP/FYP/FYP/tsconfig.json) to allow type-safe interop with analytics and modal components.
+- **Yaman's Navigation Rail & Layout**:
+  - Implemented the persistent fixed left navigation rail with SpendSense branding and real-time Supabase connection status.
+  - Added multi-tab navigation:
+    - **`01 Risk & Supply`**: Lead-time volatility overview, numbered metrics grid, risk distribution bar, Recharts vendor volatility rankings, and monitored purchase orders.
+    - **`02 Spend Analytics`**: Mounts `SpendAnalyticsView` (HHI concentration index, Pareto supplier rankings, category breakdowns, spend velocity, and zero-leakage reconciliation table).
+    - **`03 Vendor Scores`**: Mounts `VendorScorecardsView` (on-time delivery rates, average delay days, letter grades A/B/C/F, cold-start flags).
+- **Yaman's Editorial Aesthetics & 6-Metric Exposure Grid**:
+  - Numbered metric cards `01` through `06` (`Orders Monitored`, `Critical Volatility`, `Warning Volatility`, `Normal Fleet`, `Buffer Capital Locked`, and `Total Cost of Risk`).
+  - Risk distribution progress bar with segmented tone percentages (`Critical`, `Warning`, `Normal`).
+- **Enhanced Exception Workspace Table (`src/components/OrdersTable.tsx`)**:
+  - Live search across Purchase Orders, Vendor IDs, and SKU IDs.
+  - Risk filter dropdown with responsive layout and mobile-optimized order cards.
+  - One-click `📥 Export CSV` button.
+  - Interactive row action pills:
+    - **`💡 Explain`**: Opens `OrderRiskExplanationModal` displaying SHAP feature attribution.
+    - **`⚡ Mitigate`**: Opens `MitigationModal` for prescriptive dual-sourcing supplier reallocation.
+    - **Vendor ID Links**: Opens `VendorModal` with Recharts lead-time timeline scatter chart and 1-day histogram.
+- **Header Controls**:
+  - **`📥 Ingest CSV`**: Launches `DataIngestionModal` with row validation and quarantine reporting.
+  - **`🔮 What-If Simulator`**: Toggles interactive policy sliders for disruption stress testing.
+  - **`🔄 Refresh`**: Real-time database sync with timestamp.
+
+---
+
+### Why it was done this way
+
+1. **Zero Compromise Between Aesthetics & Functionality**: Rather than choosing between Yaman's visual design and the completed backend/ML features, Option A unifies both into a cohesive enterprise SaaS platform.
+2. **Clean Single Source of Truth**: Retiring `src/App.jsx` eliminates Vite module resolution conflicts and guarantees future teammates edit a single, type-safe application shell.
+
+---
+
+### How to verify
+
+1. **Verify Vite Build**:
+   ```bash
+   npm run build
+   ```
+   - Confirms clean bundling of `src/App.tsx` with zero JSX collision.
+2. **Verify Navigation & Tabs**:
+   - Open `http://localhost:5186/`.
+   - Click `01 Risk & Supply`, `02 Spend Analytics`, and `03 Vendor Scores` in the left rail. Confirm all charts and tables render reactively.
+3. **Verify Interactive Modals**:
+   - Click `📥 Ingest CSV` in the header $\to$ Ingestion modal opens.
+   - Click `💡 Explain` on any order row $\to$ SHAP delay attribution modal opens.
+   - Click `⚡ Mitigate` on a high-risk row $\to$ Dual-sourcing mitigation drawer opens.
+   - Click any Vendor ID $\to$ Delivery timeline and histogram modal opens.
+
+---
+
 ## Roadmap completion summary
 
 | Section | Feature | Key Artifacts | Status |
 |---|---|---|---|
 | **3.1** | Dynamic demand calculation | `ml_service.py` (`sku_daily_demand`, combined SS formula) | Complete |
-| **3.2** | Financial cost of risk | `ml_service.py` (`cost_of_risk_metrics`), `App.jsx` (`financials`, SummaryBar) | Complete |
-| **3.3** | Interactive vendor charts | `App.jsx` (`VendorRankingChart`, `VendorModal` timeline & histogram via Recharts) | Complete |
-| **3.4** | Cold-start vendor fallback | `ml_service.py` (`_global_lead_time_stats`, `COLD_` prefix), `App.jsx` badges & modal banner | Complete |
+| **3.2** | Financial cost of risk | `ml_service.py` (`cost_of_risk_metrics`), `App.tsx` (`metrics-grid`, summary cards) | Complete |
+| **3.3** | Interactive vendor charts | `App.tsx` (`VendorRankingChart`, `VendorModal` timeline & histogram via Recharts) | Complete |
+| **3.4** | Cold-start vendor fallback | `ml_service.py` (`_global_lead_time_stats`, `COLD_` prefix), `RiskBadge.tsx` cold pill | Complete |
 | **3.5** | Cloud deployment & CI/CD | `.env.example`, `Dockerfile`, `render.yaml`, `vercel.json`, `.github/workflows/ci.yml` | Complete |
-| **3.6** | What-If Simulation & CSV Export | `ml_service.py` (`/api/simulate_scenario`), `App.jsx` (`ScenarioSimulatorPanel`, `exportOrdersToCSV`) | Complete |
-| **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.jsx` (`MitigationModal`, `findAlternativeSuppliers`) | Complete |
-| **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), `App.jsx` Gateway route | Complete |
-| **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, `App.jsx`, quarantine error CSV | Complete |
-| **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, `App.jsx`, HHI & reconciliation CSV | Complete |
-| **4.4** | Vendor Historical Scorecards & On-Time Scoring | `server/index.js`, `src/VendorScorecardsView.jsx`, `src/OrderRiskExplanationModal.jsx`, `App.jsx` | Complete |
+| **3.6** | What-If Simulation & CSV Export | `ml_service.py` (`/api/simulate_scenario`), `App.tsx` (Simulator panel, CSV export) | Complete |
+| **3.7** | Prescriptive Mitigation & Supplier Recs | `ml_service.py` (`/api/recommend_alternatives`), `App.tsx` (`MitigationModal`) | Complete |
+| **4.1** | Cloud Architecture & Node.js API Gateway | `server/index.js`, `package.json` (`server` script), Express proxy routes | Complete |
+| **4.2** | Data Ingestion, Row Validation & Quarantine | `server/index.js`, `src/DataIngestionModal.jsx`, quarantine error CSV | Complete |
+| **4.3** | Core Spend Analytics & Vendor Concentration | `server/index.js`, `src/SpendAnalyticsView.jsx`, HHI & reconciliation CSV | Complete |
+| **4.4** | Vendor Historical Scorecards & On-Time Scoring | `server/index.js`, `src/VendorScorecardsView.jsx`, `OrderRiskExplanationModal.jsx` | Complete |
 | **4.5** | SpendSense Rebranding & Port De-Conflict | `index.html`, `vite.config.ts`, `server/index.js` (`deriveCategory`) | Complete |
 | **5.0** | Final Defense Refactoring (5 Rectifications) | `ml_service.py` (Hurdle, SHAP, Croston SBA), `server/index.js` (Job Queue, RLS) | Complete |
+| **5.6** | Production UI Unification & TypeScript Migration | `src/App.tsx`, `OrdersTable.tsx`, `RiskBadge.tsx`, `src/lib/orders.ts` | Complete |
